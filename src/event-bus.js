@@ -1,0 +1,15 @@
+/**
+ * Global event bus for Gekko.
+ *
+ * All agent actions (payments, API calls, escrow events, task updates)
+ * are emitted here as 'agent-event' events. The server captures these
+ * for the SSE timeline stream and rolling event log.
+ */
+const EventEmitter = require('events');
+
+const MAX_LISTENERS = 50;
+
+const dispatchEvents = new EventEmitter();
+dispatchEvents.setMaxListeners(MAX_LISTENERS);
+
+module.exports = dispatchEvents;

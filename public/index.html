@@ -1,0 +1,2143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gekko — Autonomous Agent Marketplace</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    #dotMatrix {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      z-index: 0;
+      pointer-events: none;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, sans-serif;
+      background: #000;
+      color: rgba(255,255,255,0.6);
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    code, .mono { font-family: 'JetBrains Mono', 'Consolas', monospace; }
+
+    .wrap {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 0 24px;
+      position: relative;
+      z-index: 1;
+    }
+
+    /* ── HERO ── */
+    .hero {
+      text-align: center;
+      padding: 100px 0 40px;
+    }
+    .hero h1 {
+      font-size: 72px;
+      font-weight: 900;
+      letter-spacing: -4px;
+      line-height: 0.9;
+      color: #fff;
+    }
+    .hero .tagline {
+      font-size: 17px;
+      color: rgba(255,255,255,0.35);
+      margin-top: 20px;
+      line-height: 1.5;
+      font-weight: 400;
+      max-width: 520px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .hero .badges {
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      margin-top: 28px;
+    }
+    .badge {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      padding: 5px 14px;
+      border-radius: 9999px;
+      font-weight: 600;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      background: rgba(255,255,255,0.04);
+      color: rgba(255,255,255,0.4);
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+
+    /* ── GOAL INPUT ── */
+    .input-section {
+      max-width: 720px;
+      margin: 0 auto 60px;
+      text-align: center;
+    }
+    .examples {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      justify-content: center;
+      margin-bottom: 16px;
+    }
+    .example-chip {
+      font-size: 11px;
+      color: rgba(255,255,255,0.3);
+      background: transparent;
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 9999px;
+      padding: 6px 14px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-weight: 500;
+    }
+    .example-chip:hover {
+      border-color: rgba(255,255,255,0.15);
+      color: rgba(255,255,255,0.6);
+    }
+    .goal-row {
+      display: flex;
+      gap: 8px;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 9999px;
+      padding: 6px 6px 6px 24px;
+      align-items: center;
+      transition: border-color 0.3s;
+    }
+    .goal-row:focus-within {
+      border-color: rgba(255,255,255,0.15);
+    }
+    .goal-row input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      padding: 10px 0;
+      color: rgba(255,255,255,0.9);
+      font-family: inherit;
+      font-size: 15px;
+      font-weight: 400;
+      outline: none;
+    }
+    .goal-row input::placeholder { color: rgba(255,255,255,0.2); }
+    .btn {
+      background: #fff;
+      color: #000;
+      border: none;
+      border-radius: 9999px;
+      padding: 12px 28px;
+      font-family: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      font-size: 13px;
+      letter-spacing: 0.3px;
+      transition: all 0.2s;
+      text-transform: uppercase;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .btn:hover {
+      background: rgba(255,255,255,0.85);
+      transform: scale(1.02);
+    }
+    .btn:active { transform: scale(0.98); }
+    .btn:disabled {
+      opacity: 0.15;
+      cursor: not-allowed;
+      transform: none;
+    }
+    .opts {
+      display: flex;
+      gap: 24px;
+      margin-top: 12px;
+      justify-content: center;
+      font-size: 12px;
+      color: rgba(255,255,255,0.25);
+      font-weight: 500;
+    }
+    .opts input {
+      width: 60px;
+      background: transparent;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 9999px;
+      padding: 4px 10px;
+      color: rgba(255,255,255,0.6);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      outline: none;
+      transition: border-color 0.2s;
+      text-align: center;
+    }
+    .opts input:focus { border-color: rgba(255,255,255,0.2); }
+
+    /* ── STATUS BANNER ── */
+    .status-banner {
+      display: none;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 20px;
+      border-radius: 9999px;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.06);
+      margin-bottom: 24px;
+      font-size: 12px;
+      color: rgba(255,255,255,0.5);
+      animation: slideIn 0.3s ease;
+    }
+    .status-banner.active { display: flex; }
+    .status-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: #fff;
+      animation: pulse 1.5s ease-in-out infinite;
+      flex-shrink: 0;
+    }
+    .status-text { flex: 1; }
+    .status-phase { color: #fff; font-weight: 700; }
+
+    /* ── STATS BAR ── */
+    .stats {
+      display: flex;
+      gap: 0;
+      padding: 0;
+      margin-bottom: 32px;
+      font-size: 12px;
+      justify-content: center;
+    }
+    .st {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      padding: 0 20px;
+      border-right: 1px solid rgba(255,255,255,0.06);
+    }
+    .st:last-child { border-right: none; }
+    .st-l {
+      color: rgba(255,255,255,0.2);
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .st-v {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 700;
+      font-size: 12px;
+      color: rgba(255,255,255,0.8);
+    }
+    .st-v.r { color: #ff6b6b; }
+
+    /* ── AGENT NETWORK ── */
+    .network-section {
+      margin: 0 0 48px;
+    }
+    .section-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      color: rgba(255,255,255,0.2);
+      text-transform: uppercase;
+      letter-spacing: 3px;
+      margin-bottom: 20px;
+      text-align: center;
+      font-weight: 600;
+    }
+    .network {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0;
+    }
+    .acard {
+      background: rgba(255,255,255,0.02);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 20px;
+      padding: 24px 28px;
+      min-width: 190px;
+      text-align: center;
+      transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+      position: relative;
+      overflow: hidden;
+    }
+    .acard::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 20%; right: 20%;
+      height: 1px;
+      opacity: 0;
+      transition: opacity 0.4s;
+    }
+    #c-o::before { background: linear-gradient(90deg, transparent, #ff6b6b, transparent); }
+    #c-r::before { background: linear-gradient(90deg, transparent, #4ecdc4, transparent); }
+    #c-w::before { background: linear-gradient(90deg, transparent, #ffe66d, transparent); }
+    .acard:hover {
+      border-color: rgba(255,255,255,0.1);
+      background: rgba(255,255,255,0.04);
+    }
+    .acard:hover::before { opacity: 1; }
+    .acard.glow {
+      border-color: rgba(255,255,255,0.12);
+      box-shadow: 0 0 40px rgba(255,255,255,0.02);
+    }
+    .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+    .dot-o { background: #ff6b6b; }
+    .dot-r { background: #4ecdc4; }
+    .dot-w { background: #ffe66d; }
+    .acard .nm { font-size: 14px; font-weight: 700; color: rgba(255,255,255,0.9); }
+    .acard .rl { font-size: 11px; color: rgba(255,255,255,0.3); margin-top: 4px; line-height: 1.4; }
+    .acard .bl {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 15px;
+      font-weight: 700;
+      margin-top: 12px;
+      color: #fff;
+    }
+    .acard .wa { font-family: 'JetBrains Mono', monospace; font-size: 9px; color: rgba(255,255,255,0.15); margin-top: 4px; }
+    .acard .wa a { color: rgba(255,255,255,0.15); text-decoration: none; transition: color 0.2s; }
+    .acard .wa a:hover { color: rgba(255,255,255,0.5); }
+
+    /* Arrows */
+    .arr { padding: 0 12px; text-align: center; }
+    .arr-line {
+      width: 40px; height: 1px;
+      margin: 0 auto;
+      position: relative;
+      background: rgba(255,255,255,0.08);
+    }
+    .arr-line::after {
+      content: '';
+      position: absolute;
+      right: -4px; top: -2px;
+      width: 0; height: 0;
+      border-left: 5px solid rgba(255,255,255,0.12);
+      border-top: 3px solid transparent;
+      border-bottom: 3px solid transparent;
+    }
+    .arr-line::before {
+      content: '';
+      position: absolute;
+      top: -1px; left: 0;
+      width: 4px; height: 3px;
+      background: rgba(255,255,255,0.15);
+      border-radius: 1px;
+      animation: travelDot 3s ease-in-out infinite;
+    }
+    @keyframes travelDot {
+      0% { left: 0; opacity: 0; }
+      10% { opacity: 1; }
+      90% { opacity: 1; }
+      100% { left: calc(100% - 4px); opacity: 0; }
+    }
+    .arr .lb {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 8px;
+      color: rgba(255,255,255,0.15);
+      display: block;
+      margin-top: 4px;
+      font-weight: 600;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+    .arr.on .arr-line { background: rgba(255,255,255,0.2); }
+    .arr.on .arr-line::after { border-left-color: rgba(255,255,255,0.3); }
+    .arr.on .arr-line::before { background: rgba(255,255,255,0.5); }
+    .arr.on .lb { color: rgba(255,255,255,0.4); }
+
+    /* ── STEPPER ── */
+    .stepper {
+      display: none;
+      margin: 0 0 32px;
+      background: rgba(255,255,255,0.02);
+      border: 1px solid rgba(255,255,255,0.05);
+      border-radius: 16px;
+      padding: 20px 24px;
+    }
+    .stepper.active { display: block; }
+    .stepper .stepper-title {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 3px;
+      font-weight: 700;
+      color: rgba(255,255,255,0.25);
+      margin-bottom: 14px;
+    }
+    .step-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.03);
+    }
+    .step-row:last-child { border-bottom: none; }
+    .step-indicator {
+      width: 22px; height: 22px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9px;
+      font-weight: 700;
+      flex-shrink: 0;
+      transition: all 0.3s;
+    }
+    .step-indicator.waiting {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.06);
+      color: rgba(255,255,255,0.2);
+    }
+    .step-indicator.active {
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.25);
+      color: #fff;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+    .step-indicator.done {
+      background: rgba(0,212,170,0.1);
+      border: 1px solid rgba(0,212,170,0.2);
+      color: #00d4aa;
+    }
+    .step-indicator.error {
+      background: rgba(255,107,107,0.1);
+      border: 1px solid rgba(255,107,107,0.2);
+      color: #ff6b6b;
+    }
+    .step-label { font-size: 12px; font-weight: 500; color: rgba(255,255,255,0.3); transition: color 0.3s; }
+    .step-row.active .step-label { color: rgba(255,255,255,0.9); }
+    .step-row.done .step-label { color: rgba(255,255,255,0.25); }
+    .step-detail {
+      margin-left: auto;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9px;
+      color: rgba(255,255,255,0.15);
+    }
+    .step-row.active .step-detail { color: rgba(255,255,255,0.5); }
+    .step-row.done .step-detail { color: rgba(255,255,255,0.2); }
+
+    /* ── PANELS ── */
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 48px; }
+    @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+    .full { grid-column: 1 / -1; }
+
+    .panel {
+      background: rgba(255,255,255,0.015);
+      border: 1px solid rgba(255,255,255,0.05);
+      border-radius: 16px;
+      overflow: hidden;
+      transition: border-color 0.3s;
+    }
+    .panel:hover { border-color: rgba(255,255,255,0.08); }
+    .ph {
+      padding: 12px 18px;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: rgba(255,255,255,0.35);
+    }
+    .ph .count {
+      background: rgba(255,255,255,0.05);
+      padding: 2px 8px;
+      border-radius: 9999px;
+      font-size: 10px;
+      font-family: 'JetBrains Mono', monospace;
+      color: rgba(255,255,255,0.3);
+    }
+    .pb {
+      padding: 12px 16px;
+      max-height: 380px;
+      overflow-y: auto;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .pb::-webkit-scrollbar { width: 2px; }
+    .pb::-webkit-scrollbar-track { background: transparent; }
+    .pb::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 2px; }
+
+    .empty {
+      color: rgba(255,255,255,0.15);
+      text-align: center;
+      padding: 24px 0;
+      font-size: 11px;
+      font-weight: 500;
+    }
+
+    /* ── SERVICE CARDS ── */
+    .svc {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 14px;
+      background: rgba(255,255,255,0.02);
+      border: 1px solid rgba(255,255,255,0.04);
+      border-radius: 12px;
+      margin-bottom: 8px;
+      transition: all 0.2s;
+    }
+    .svc:hover { border-color: rgba(255,255,255,0.08); }
+    .svc .svc-name { font-size: 13px; font-weight: 700; color: rgba(255,255,255,0.85); }
+    .svc .svc-desc { font-size: 11px; color: rgba(255,255,255,0.3); margin-top: 2px; }
+    .svc .svc-price {
+      margin-left: auto;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 16px;
+      font-weight: 700;
+      color: #fff;
+      white-space: nowrap;
+    }
+    .svc .svc-agent { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: rgba(255,255,255,0.2); margin-top: 3px; }
+    .svc .svc-caps { display: flex; gap: 4px; margin-top: 4px; }
+    .cap-tag {
+      font-size: 9px;
+      padding: 2px 7px;
+      border-radius: 9999px;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.06);
+      color: rgba(255,255,255,0.35);
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 500;
+    }
+
+    /* ── SPENDING CONTROLS ── */
+    .appr {
+      padding: 14px 16px;
+      background: rgba(255,255,255,0.02);
+      border: 1px solid rgba(255,255,255,0.04);
+      border-radius: 12px;
+      margin-bottom: 8px;
+    }
+    .appr .appr-header { display: flex; justify-content: space-between; align-items: center; }
+    .appr .appr-agent { font-size: 12px; color: rgba(255,255,255,0.5); font-weight: 600; }
+    .appr .appr-amount { font-family: 'JetBrains Mono', monospace; font-size: 15px; color: #ffe66d; font-weight: 700; }
+    .appr .appr-task { font-size: 11px; color: rgba(255,255,255,0.35); margin-top: 4px; }
+
+    /* ── ESCROW CARDS ── */
+    .esc {
+      padding: 14px 16px;
+      background: rgba(255,255,255,0.02);
+      border: 1px solid rgba(255,255,255,0.04);
+      border-radius: 12px;
+      margin-bottom: 10px;
+      font-size: 11px;
+      transition: border-color 0.2s;
+    }
+    .esc:hover { border-color: rgba(255,255,255,0.08); }
+    .esc-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .esc-status {
+      padding: 3px 10px;
+      border-radius: 9999px;
+      font-size: 9px;
+      font-weight: 700;
+      font-family: 'JetBrains Mono', monospace;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+    .esc-status.pending { background: rgba(255,230,109,0.06); color: #ffe66d; border: 1px solid rgba(255,230,109,0.1); }
+    .esc-status.released { background: rgba(0,212,170,0.06); color: #00d4aa; border: 1px solid rgba(0,212,170,0.1); }
+    .esc-status.failed { background: rgba(255,107,107,0.06); color: #ff6b6b; border: 1px solid rgba(255,107,107,0.1); }
+    .esc-amount {
+      margin-left: auto;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 15px;
+      font-weight: 700;
+      color: #fff;
+    }
+    .esc-flow { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+    .esc-flow-agent { font-size: 10px; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
+    .esc-flow-agent.buyer { color: #ff6b6b; }
+    .esc-flow-agent.seller { color: #4ecdc4; }
+    .esc-flow-arrow { color: rgba(255,255,255,0.15); font-size: 10px; }
+    .esc-desc { color: rgba(255,255,255,0.35); font-size: 10px; margin-bottom: 8px; }
+    .esc-lifecycle { display: flex; align-items: center; }
+    .esc-phase { display: flex; align-items: center; gap: 3px; font-size: 9px; font-family: 'JetBrains Mono', monospace; font-weight: 600; }
+    .esc-phase-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+    .esc-phase-dot.done { background: #00d4aa; }
+    .esc-phase-dot.active { background: #ffe66d; animation: pulse 1.5s ease-in-out infinite; }
+    .esc-phase-dot.waiting { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); }
+    .esc-phase-label { color: rgba(255,255,255,0.25); }
+    .esc-phase-label.done { color: rgba(255,255,255,0.2); }
+    .esc-phase-connector { width: 16px; height: 1px; background: rgba(255,255,255,0.04); margin: 0 3px; }
+    .esc-phase-connector.done { background: rgba(0,212,170,0.15); }
+    .esc-meta { display: flex; gap: 12px; margin-top: 6px; font-size: 9px; color: rgba(255,255,255,0.2); font-family: 'JetBrains Mono', monospace; }
+    .esc-meta a { color: rgba(255,255,255,0.2); text-decoration: none; transition: color 0.2s; }
+    .esc-meta a:hover { color: rgba(255,255,255,0.5); }
+
+    /* ── TIMELINE ── */
+    .tl-entry {
+      display: flex;
+      gap: 8px;
+      padding: 5px 0;
+      align-items: baseline;
+      font-size: 11px;
+      border-bottom: 1px solid rgba(255,255,255,0.025);
+    }
+    .tl-entry:last-child { border-bottom: none; }
+    .tl-time { font-family: 'JetBrains Mono', monospace; color: rgba(255,255,255,0.15); font-size: 9px; min-width: 58px; font-weight: 500; }
+    .tl-agent { font-weight: 700; min-width: 85px; font-size: 10px; }
+    .tl-agent.o { color: #ff6b6b; }
+    .tl-agent.r { color: #4ecdc4; }
+    .tl-agent.w { color: #ffe66d; }
+    .tl-agent.m { color: rgba(255,255,255,0.4); }
+    .tl-agent.l { color: #a78bfa; }
+    .tl-act { font-family: 'JetBrains Mono', monospace; color: rgba(255,255,255,0.2); font-size: 10px; }
+    .tl-det { color: rgba(255,255,255,0.35); font-size: 11px; }
+    .tl-icon { font-size: 6px; min-width: 10px; color: rgba(255,255,255,0.15); }
+    .tl-icon.ic-pay { color: #00d4aa; }
+    .tl-icon.ic-esc { color: #4ecdc4; }
+    .tl-icon.ic-api { color: #a78bfa; }
+    .tl-icon.ic-goal { color: #ff6b6b; }
+    .tl-icon.ic-appr { color: #ffe66d; }
+
+    /* ── TRANSACTION CARDS ── */
+    .txn {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      background: rgba(255,255,255,0.015);
+      border: 1px solid rgba(255,255,255,0.03);
+      border-radius: 10px;
+      margin-bottom: 5px;
+      font-size: 11px;
+      transition: all 0.2s;
+    }
+    .txn:nth-child(even) { background: rgba(255,255,255,0.008); }
+    .txn:hover { border-color: rgba(255,255,255,0.07); }
+    .txn-agent {
+      font-size: 9px;
+      font-family: 'JetBrains Mono', monospace;
+      padding: 3px 8px;
+      border-radius: 9999px;
+      font-weight: 700;
+      min-width: 54px;
+      text-align: center;
+    }
+    .txn-agent.o { background: rgba(255,107,107,0.06); color: #ff6b6b; border: 1px solid rgba(255,107,107,0.08); }
+    .txn-agent.r { background: rgba(78,205,196,0.06); color: #4ecdc4; border: 1px solid rgba(78,205,196,0.08); }
+    .txn-agent.w { background: rgba(255,230,109,0.06); color: #ffe66d; border: 1px solid rgba(255,230,109,0.08); }
+    .txn-memo { color: rgba(255,255,255,0.35); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .txn-amount { font-family: 'JetBrains Mono', monospace; font-weight: 700; color: #fff; white-space: nowrap; }
+    .txn-status {
+      font-size: 8px;
+      font-family: 'JetBrains Mono', monospace;
+      padding: 2px 8px;
+      border-radius: 9999px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+    .txn-status.confirmed { background: rgba(0,212,170,0.06); color: #00d4aa; border: 1px solid rgba(0,212,170,0.08); }
+    .txn-status.queued { background: rgba(255,230,109,0.06); color: #ffe66d; border: 1px solid rgba(255,230,109,0.08); }
+    .txn-status.failed { background: rgba(255,107,107,0.06); color: #ff6b6b; border: 1px solid rgba(255,107,107,0.08); }
+    .txn-hash { font-family: 'JetBrains Mono', monospace; font-size: 9px; }
+    .txn-hash a { color: rgba(255,255,255,0.2); text-decoration: none; transition: color 0.2s; }
+    .txn-hash a:hover { color: rgba(255,255,255,0.5); }
+
+    /* ── REASONING ── */
+    .reason-entry {
+      display: flex;
+      gap: 8px;
+      padding: 6px 0;
+      align-items: baseline;
+      font-size: 11px;
+      border-bottom: 1px solid rgba(255,255,255,0.025);
+    }
+    .reason-entry:last-child { border-bottom: none; }
+    .reason-agent { font-weight: 700; min-width: 75px; font-size: 10px; }
+    .reason-agent.o { color: #ff6b6b; }
+    .reason-agent.r { color: #4ecdc4; }
+    .reason-agent.w { color: #ffe66d; }
+    .reason-action { font-family: 'JetBrains Mono', monospace; font-size: 9px; color: rgba(255,255,255,0.2); min-width: 90px; }
+    .reason-text { color: rgba(255,255,255,0.4); font-size: 11px; line-height: 1.4; }
+
+    /* ── REPORT ── */
+    .report { font-size: 14px; line-height: 1.8; color: rgba(255,255,255,0.5); }
+    .report h1, .report h2, .report h3 { color: rgba(255,255,255,0.9); margin: 24px 0 8px; font-weight: 700; }
+    .report h1 { font-size: 22px; }
+    .report h2 { font-size: 17px; }
+    .report h3 { font-size: 14px; }
+    .report p { margin: 8px 0; }
+    .report strong { color: rgba(255,255,255,0.8); }
+    .report hr { border: none; border-top: 1px solid rgba(255,255,255,0.06); margin: 20px 0; }
+    .report ul, .report ol { padding-left: 20px; margin: 8px 0; }
+    .report li { margin: 4px 0; }
+    .report a { color: rgba(255,255,255,0.6); text-underline-offset: 2px; text-decoration-color: rgba(255,255,255,0.15); }
+    .report a:hover { color: #fff; }
+    .report code { background: rgba(255,255,255,0.05); padding: 2px 6px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: rgba(255,255,255,0.7); }
+
+    /* ── DIVIDER ── */
+    .section-divider {
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent);
+      margin: 56px 0;
+    }
+
+    /* ── ABOUT ── */
+    .about {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 1px;
+      margin: 0 0 56px;
+      background: rgba(255,255,255,0.04);
+      border-radius: 16px;
+      overflow: hidden;
+    }
+    @media (max-width: 700px) { .about { grid-template-columns: 1fr; } }
+    .about-card {
+      background: rgba(0,0,0,0.9);
+      padding: 28px 24px;
+    }
+    .about-card h3 {
+      font-size: 13px;
+      font-weight: 700;
+      color: rgba(255,255,255,0.9);
+      margin-bottom: 8px;
+    }
+    .about-card p {
+      font-size: 13px;
+      color: rgba(255,255,255,0.35);
+      line-height: 1.6;
+    }
+
+    /* ── LOCUS INTEGRATION ── */
+    .locus-section { margin: 0 0 56px; }
+    .locus-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 1px;
+      background: rgba(255,255,255,0.04);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .locus-feat {
+      background: rgba(0,0,0,0.9);
+      padding: 18px 20px;
+    }
+    .locus-feat .feat-check {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      color: #00d4aa;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    .locus-feat .feat-name {
+      font-size: 13px;
+      font-weight: 700;
+      color: rgba(255,255,255,0.85);
+      margin-bottom: 3px;
+    }
+    .locus-feat .feat-desc {
+      font-size: 11px;
+      color: rgba(255,255,255,0.3);
+      line-height: 1.5;
+    }
+    .locus-feat .feat-tag {
+      display: inline-block;
+      margin-top: 6px;
+      font-size: 8px;
+      font-family: 'JetBrains Mono', monospace;
+      padding: 2px 8px;
+      border-radius: 9999px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      background: rgba(255,255,255,0.04);
+      color: rgba(255,255,255,0.35);
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+
+    /* ── VISION ── */
+    .vision-section {
+      margin: 0 0 56px;
+      text-align: center;
+      padding: 64px 32px;
+      position: relative;
+    }
+    .vision-section h2 {
+      font-size: 32px;
+      font-weight: 900;
+      color: #fff;
+      letter-spacing: -1.5px;
+      margin-bottom: 8px;
+    }
+    .vision-subtitle {
+      font-size: 14px;
+      color: rgba(255,255,255,0.25);
+      margin-bottom: 24px;
+    }
+    .vision-lead {
+      font-size: 15px;
+      color: rgba(255,255,255,0.4);
+      line-height: 1.7;
+      max-width: 640px;
+      margin: 0 auto 40px;
+    }
+    .vision-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1px;
+      margin-bottom: 40px;
+      text-align: left;
+      background: rgba(255,255,255,0.04);
+      border-radius: 16px;
+      overflow: hidden;
+    }
+    .vision-card {
+      padding: 24px 20px;
+      background: rgba(0,0,0,0.9);
+    }
+    .vision-card-icon { font-size: 16px; margin-bottom: 8px; opacity: 0.3; }
+    .vision-card h3 { font-size: 13px; font-weight: 700; color: rgba(255,255,255,0.85); margin-bottom: 4px; }
+    .vision-card p { font-size: 11px; color: rgba(255,255,255,0.3); line-height: 1.5; margin: 0; }
+    .vision-card .v-tag {
+      display: inline-block;
+      margin-top: 8px;
+      font-size: 8px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 9999px;
+      font-family: 'JetBrains Mono', monospace;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+    .v-tag.today { background: rgba(0,212,170,0.06); color: #00d4aa; border: 1px solid rgba(0,212,170,0.08); }
+    .v-tag.next { background: rgba(255,255,255,0.03); color: rgba(255,255,255,0.4); border: 1px solid rgba(255,255,255,0.06); }
+    .v-tag.future { background: rgba(255,255,255,0.02); color: rgba(255,255,255,0.25); border: 1px solid rgba(255,255,255,0.04); }
+    .vision-divider {
+      width: 32px;
+      height: 1px;
+      background: rgba(255,255,255,0.08);
+      margin: 0 auto 24px;
+    }
+    .vision-quote {
+      font-size: 16px;
+      font-style: italic;
+      color: rgba(255,255,255,0.4);
+      max-width: 560px;
+      margin: 0 auto 6px;
+      line-height: 1.6;
+    }
+    .vision-quote span { color: #fff; font-style: normal; font-weight: 700; }
+    .vision-attribution {
+      font-size: 10px;
+      color: rgba(255,255,255,0.15);
+      margin-bottom: 36px;
+    }
+    .vision-stats {
+      display: flex;
+      justify-content: center;
+      gap: 56px;
+    }
+    .vision-stat .vs-num {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 28px;
+      font-weight: 900;
+      color: #fff;
+    }
+    .vision-stat .vs-label {
+      font-size: 9px;
+      color: rgba(255,255,255,0.2);
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      font-weight: 600;
+      margin-top: 2px;
+    }
+    @media (max-width: 700px) {
+      .vision-grid { grid-template-columns: 1fr; }
+    }
+
+    /* ── FOOTER ── */
+    .footer {
+      text-align: center;
+      padding: 40px 0 32px;
+      font-size: 11px;
+      color: rgba(255,255,255,0.15);
+      font-weight: 500;
+      border-top: 1px solid rgba(255,255,255,0.04);
+    }
+    .footer a { color: rgba(255,255,255,0.25); text-decoration: none; transition: color 0.2s; }
+    .footer a:hover { color: rgba(255,255,255,0.6); }
+
+    /* ── TOAST NOTIFICATIONS ── */
+    .toast-container {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column-reverse;
+      gap: 6px;
+      pointer-events: none;
+      max-width: 340px;
+    }
+    .toast {
+      pointer-events: auto;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      border-radius: 12px;
+      background: rgba(15,15,15,0.95);
+      backdrop-filter: blur(40px);
+      -webkit-backdrop-filter: blur(40px);
+      border: 1px solid rgba(255,255,255,0.08);
+      font-size: 11px;
+      color: rgba(255,255,255,0.8);
+      animation: toastIn 0.3s ease, toastOut 0.3s ease 4.7s forwards;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+    }
+    .toast-icon {
+      width: 24px; height: 24px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      flex-shrink: 0;
+      font-weight: 700;
+    }
+    .toast-icon.escrow { background: rgba(78,205,196,0.1); color: #4ecdc4; }
+    .toast-icon.payment { background: rgba(0,212,170,0.1); color: #00d4aa; }
+    .toast-icon.goal { background: rgba(255,107,107,0.1); color: #ff6b6b; }
+    .toast-icon.api { background: rgba(255,230,109,0.1); color: #ffe66d; }
+    .toast-icon.done { background: rgba(0,212,170,0.1); color: #00d4aa; }
+    .toast-body { flex: 1; min-width: 0; }
+    .toast-title { font-weight: 700; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 1px; color: rgba(255,255,255,0.7); }
+    .toast-msg { color: rgba(255,255,255,0.3); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .toast-amount { font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 12px; color: #fff; flex-shrink: 0; }
+    @keyframes toastIn { from { opacity: 0; transform: translateX(60px); } to { opacity: 1; transform: translateX(0); } }
+    @keyframes toastOut { from { opacity: 1; } to { opacity: 0; transform: translateX(60px); } }
+
+    /* ── AGENT ACTIVE STATES ── */
+    .acard.active-agent {
+      border-color: rgba(255,255,255,0.15);
+    }
+    .acard.active-agent .dot { animation: pulse 1s ease-in-out infinite; }
+
+    /* ── ANIMATIONS ── */
+    @keyframes pulse { 0%,100% { opacity: 0.3; } 50% { opacity: 1; } }
+    .pulsing { animation: pulse 2s ease-in-out infinite; }
+    @keyframes slideIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+    .tl-entry { animation: slideIn 0.2s ease; }
+    @keyframes shimmer {
+      0% { background-position: -200% 0; }
+      100% { background-position: 200% 0; }
+    }
+    .empty {
+      background: linear-gradient(90deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.15) 50%, rgba(255,255,255,0.08) 100%);
+      background-size: 200% 100%;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      animation: shimmer 4s ease-in-out infinite;
+    }
+
+    /* ── FLOATING NAVBAR ── */
+    .floating-nav {
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 50;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      padding: 10px 24px;
+      border-radius: 9999px;
+      background: rgba(20,20,20,0.6);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+    .floating-nav .nav-logo {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 800;
+      font-size: 14px;
+      color: #fff;
+      letter-spacing: -0.5px;
+      text-decoration: none;
+    }
+    .floating-nav .nav-logo .logo-dots {
+      position: relative;
+      width: 18px;
+      height: 18px;
+    }
+    .floating-nav .nav-logo .logo-dots span {
+      position: absolute;
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.7);
+    }
+    .floating-nav .nav-logo .logo-dots span:nth-child(1) { top: 0; left: 50%; transform: translateX(-50%); }
+    .floating-nav .nav-logo .logo-dots span:nth-child(2) { left: 0; top: 50%; transform: translateY(-50%); }
+    .floating-nav .nav-logo .logo-dots span:nth-child(3) { right: 0; top: 50%; transform: translateY(-50%); }
+    .floating-nav .nav-logo .logo-dots span:nth-child(4) { bottom: 0; left: 50%; transform: translateX(-50%); }
+    .nav-links {
+      display: flex;
+      gap: 20px;
+    }
+    .nav-link {
+      font-size: 13px;
+      color: rgba(255,255,255,0.4);
+      text-decoration: none;
+      font-weight: 500;
+      position: relative;
+      overflow: hidden;
+      display: inline-flex;
+      align-items: center;
+      height: 18px;
+    }
+    .nav-link .nav-link-inner {
+      display: flex;
+      flex-direction: column;
+      transition: transform 0.3s ease;
+    }
+    .nav-link:hover .nav-link-inner {
+      transform: translateY(-50%);
+    }
+    .nav-link .nav-link-inner span:first-child { color: rgba(255,255,255,0.4); }
+    .nav-link .nav-link-inner span:last-child { color: #fff; }
+    .nav-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .nav-btn {
+      font-size: 12px;
+      padding: 6px 16px;
+      border-radius: 9999px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-family: inherit;
+    }
+    .nav-btn.ghost {
+      background: transparent;
+      border: 1px solid rgba(255,255,255,0.1);
+      color: rgba(255,255,255,0.5);
+    }
+    .nav-btn.ghost:hover {
+      border-color: rgba(255,255,255,0.2);
+      color: #fff;
+    }
+    .nav-btn.glow {
+      background: linear-gradient(135deg, rgba(255,255,255,0.9), rgba(255,255,255,0.7));
+      border: none;
+      color: #000;
+      font-weight: 700;
+      position: relative;
+    }
+    .nav-btn.glow::before {
+      content: '';
+      position: absolute;
+      inset: -4px;
+      border-radius: 9999px;
+      background: rgba(255,255,255,0.15);
+      filter: blur(12px);
+      z-index: -1;
+      transition: all 0.3s;
+    }
+    .nav-btn.glow:hover::before {
+      inset: -6px;
+      background: rgba(255,255,255,0.25);
+      filter: blur(16px);
+    }
+
+    /* ── BACKGROUND OVERLAYS (from 21st.dev) ── */
+    .bg-overlays {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+    }
+    .bg-radial {
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(circle at center, rgba(0,0,0,0.8) 0%, transparent 100%);
+    }
+    .bg-top-fade {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 30%;
+      background: linear-gradient(to bottom, #000 0%, transparent 100%);
+    }
+    .bg-bottom-fade {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 20%;
+      background: linear-gradient(to top, #000 0%, transparent 100%);
+    }
+
+    /* ── GLOW BUTTON (Run Gekko) ── */
+    .btn {
+      position: relative;
+    }
+    .btn::before {
+      content: '';
+      position: absolute;
+      inset: -6px;
+      border-radius: 9999px;
+      background: rgba(255,255,255,0.08);
+      filter: blur(16px);
+      z-index: -1;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    .btn:hover::before {
+      opacity: 1;
+    }
+    .btn:disabled::before {
+      display: none;
+    }
+
+    /* ── SECTION FADE-IN ── */
+    .fade-section {
+      opacity: 0;
+      transform: translateY(20px);
+      transition: opacity 0.8s ease, transform 0.8s ease;
+    }
+    .fade-section.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    /* ── RESPONSIVE ── */
+    @media (max-width: 700px) {
+      .network { flex-direction: column; gap: 10px; }
+      .arr { transform: rotate(90deg); padding: 6px 0; }
+      .hero h1 { font-size: 48px; letter-spacing: -3px; }
+      .stats { flex-wrap: wrap; gap: 0; }
+      .st { padding: 6px 12px; }
+      .goal-row { flex-direction: column; border-radius: 16px; padding: 12px; }
+      .goal-row input { text-align: center; }
+      .btn { width: 100%; }
+      .vision-stats { gap: 24px; }
+      .floating-nav { padding: 10px 16px; gap: 12px; }
+      .nav-links { display: none; }
+      .nav-actions { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="dotMatrix"></canvas>
+
+  <!-- Background Overlays (from 21st.dev) -->
+  <div class="bg-overlays">
+    <div class="bg-radial"></div>
+    <div class="bg-top-fade"></div>
+    <div class="bg-bottom-fade"></div>
+  </div>
+
+  <!-- Floating Navbar -->
+  <nav class="floating-nav">
+    <a href="#" class="nav-logo">
+      <div class="logo-dots"><span></span><span></span><span></span><span></span></div>
+      Gekko
+    </a>
+    <div class="nav-links">
+      <a href="#about-section" class="nav-link"><span class="nav-link-inner"><span>How it Works</span><span>How it Works</span></span></a>
+      <a href="#locus-section" class="nav-link"><span class="nav-link-inner"><span>Locus</span><span>Locus</span></span></a>
+      <a href="#vision-section" class="nav-link"><span class="nav-link-inner"><span>Vision</span><span>Vision</span></span></a>
+    </div>
+    <div class="nav-actions">
+      <a href="https://github.com/" target="_blank" class="nav-btn ghost">GitHub</a>
+      <button class="nav-btn glow" onclick="document.getElementById('goalIn').focus()">Try Demo</button>
+    </div>
+  </nav>
+
+  <div class="toast-container" id="toasts"></div>
+  <div class="wrap">
+
+    <!-- Hero -->
+    <div class="hero">
+      <h1><span class="word-agent">Dis</span><span class="word-mesh">patch</span></h1>
+      <p class="tagline">Autonomous AI agents that discover, hire, and pay each other in USDC on Base.</p>
+      <div class="badges">
+        <span class="badge locus">Locus</span>
+        <span class="badge base">Base</span>
+        <span class="badge usdc">USDC</span>
+      </div>
+    </div>
+
+    <!-- Goal Input (primary CTA, right after hero) -->
+    <div class="input-section">
+      <div class="examples">
+        <div class="example-chip" onclick="setGoal(this)">Top DeFi protocols on Base</div>
+        <div class="example-chip" onclick="setGoal(this)">Locus vs traditional payment APIs</div>
+        <div class="example-chip" onclick="setGoal(this)">What is ERC-8004?</div>
+        <div class="example-chip" onclick="setGoal(this)">AI agent infrastructure trends</div>
+      </div>
+      <div class="goal-row">
+        <input type="text" id="goalIn" maxlength="500" placeholder="Give Gekko a goal..." />
+        <button class="btn" id="runBtn" onclick="run()">Run Gekko</button>
+      </div>
+      <div class="opts">
+        <span>Budget <input type="number" id="budIn" value="1.0" min="0.1" step="0.25" /> USDC</span>
+        <span>Max per task <input type="number" id="taskIn" value="0.25" min="0.05" step="0.05" /> USDC</span>
+      </div>
+    </div>
+
+    <!-- Status Banner -->
+    <div class="status-banner" id="statusBanner">
+      <div class="status-dot"></div>
+      <div class="status-text"><span class="status-phase" id="statusPhase">Initializing</span> <span id="statusDetail"></span></div>
+    </div>
+
+    <!-- Stats -->
+    <div class="stats">
+      <div class="st"><span class="st-l">Status</span><span class="st-v" id="s-st">idle</span></div>
+      <div class="st"><span class="st-l">Budget</span><span class="st-v" id="s-bud">--</span></div>
+      <div class="st"><span class="st-l">Spent</span><span class="st-v r" id="s-sp">$0.00</span></div>
+      <div class="st"><span class="st-l">Tasks</span><span class="st-v" id="s-tk">0</span></div>
+      <div class="st"><span class="st-l">Escrows</span><span class="st-v" id="s-es">0</span></div>
+    </div>
+
+    <!-- Agent Network -->
+    <div class="network-section">
+      <div class="section-label">Agent Network</div>
+      <div class="network">
+        <div class="acard" id="c-o">
+          <div><span class="dot dot-o"></span><span class="nm">Orchestrator</span></div>
+          <div class="rl">Discovers, budgets, pays</div>
+          <div class="bl" id="b-o">--</div>
+          <div class="wa"><a id="l-o" href="#" target="_blank"></a></div>
+        </div>
+        <div class="arr" id="a1">
+          <div class="arr-line"></div>
+          <span class="lb">USDC</span>
+        </div>
+        <div class="acard" id="c-r">
+          <div><span class="dot dot-r"></span><span class="nm">Researcher</span></div>
+          <div class="rl">Search + scrape via Locus</div>
+          <div class="bl" id="b-r">--</div>
+          <div class="wa"><a id="l-r" href="#" target="_blank"></a></div>
+        </div>
+        <div class="arr" id="a2">
+          <div class="arr-line"></div>
+          <span class="lb">USDC</span>
+        </div>
+        <div class="acard" id="c-w">
+          <div><span class="dot dot-w"></span><span class="nm">Writer</span></div>
+          <div class="rl">Synthesize via Locus LLMs</div>
+          <div class="bl" id="b-w">--</div>
+          <div class="wa"><a id="l-w" href="#" target="_blank"></a></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Progress Stepper -->
+    <div class="stepper" id="stepper">
+      <div class="stepper-title">Payment Flow</div>
+      <div class="step-row" id="step-1">
+        <div class="step-indicator waiting">1</div>
+        <span class="step-label">Verify orchestrator wallet balance</span>
+        <span class="step-detail">Locus API</span>
+      </div>
+      <div class="step-row" id="step-2">
+        <div class="step-indicator waiting">2</div>
+        <span class="step-label">Discover agents from service registry</span>
+        <span class="step-detail">marketplace</span>
+      </div>
+      <div class="step-row" id="step-3">
+        <div class="step-indicator waiting">3</div>
+        <span class="step-label">Create escrow via Locus checkout session</span>
+        <span class="step-detail">lock funds</span>
+      </div>
+      <div class="step-row" id="step-4">
+        <div class="step-indicator waiting">4</div>
+        <span class="step-label">Worker preflight -- verify escrow is valid</span>
+        <span class="step-detail">preflight</span>
+      </div>
+      <div class="step-row" id="step-5">
+        <div class="step-indicator waiting">5</div>
+        <span class="step-label">Researcher searches via Exa + Firecrawl</span>
+        <span class="step-detail">wrapped APIs</span>
+      </div>
+      <div class="step-row" id="step-6">
+        <div class="step-indicator waiting">6</div>
+        <span class="step-label">Release escrow -- USDC payment on Base</span>
+        <span class="step-detail">on-chain</span>
+      </div>
+      <div class="step-row" id="step-7">
+        <div class="step-indicator waiting">7</div>
+        <span class="step-label">Writer synthesizes report via Gemini</span>
+        <span class="step-detail">wrapped APIs</span>
+      </div>
+      <div class="step-row" id="step-8">
+        <div class="step-indicator waiting">8</div>
+        <span class="step-label">Release final payment -- goal complete</span>
+        <span class="step-detail">settlement</span>
+      </div>
+    </div>
+
+    <!-- Panels -->
+    <div class="grid fade-section">
+      <div class="panel full">
+        <div class="ph">Live Timeline <span class="count" id="tl-count">0</span></div>
+        <div class="pb" id="timeline"><div class="empty">run a goal to see real-time agent activity</div></div>
+      </div>
+
+      <div class="panel">
+        <div class="ph">Marketplace <span class="count" id="svc-count">0</span></div>
+        <div class="pb" id="svcList"><div class="empty">loading services...</div></div>
+      </div>
+
+      <div class="panel">
+        <div class="ph">Escrow Sessions <span class="count" id="esc-count">0</span></div>
+        <div class="pb" id="escList"><div class="empty">no escrows yet</div></div>
+      </div>
+
+      <div class="panel full">
+        <div class="ph">On-Chain Transactions <span class="count" id="txn-count">0</span></div>
+        <div class="pb" id="txnList"><div class="empty">loading transactions...</div></div>
+      </div>
+
+      <div class="panel full">
+        <div class="ph">Report Output</div>
+        <div class="pb"><div class="report" id="reportOut"><div class="empty">submit a goal to see the synthesized report</div></div></div>
+      </div>
+
+      <div class="panel">
+        <div class="ph">Spending Controls <span class="count" id="apr-count">0</span></div>
+        <div class="pb" id="aprList"><div class="empty">no payments flagged</div></div>
+      </div>
+
+      <div class="panel">
+        <div class="ph">Agent Reasoning <span class="count" id="rsn-count">0</span></div>
+        <div class="pb" id="reasonList"><div class="empty">run a goal to see agent reasoning</div></div>
+      </div>
+    </div>
+
+    <div class="section-divider"></div>
+
+    <!-- About -->
+    <div class="about fade-section" id="about-section">
+      <div class="about-card">
+        <h3>How it works</h3>
+        <p>Give a goal to the orchestrator. It discovers agents, escrows USDC via Locus, dispatches work, and releases payment on delivery. Every dollar tracked on-chain.</p>
+      </div>
+      <div class="about-card">
+        <h3>Why it matters</h3>
+        <p>AI agents can think and act, but can't safely pay each other. Gekko gives every agent its own Locus wallet with spending controls, making autonomous coordination real.</p>
+      </div>
+      <div class="about-card">
+        <h3>Safety first</h3>
+        <p>Rate limiting, budget caps, Locus spending controls, checkout escrow, and full audit trails with agent reasoning logs. Every decision is explainable.</p>
+      </div>
+    </div>
+
+    <!-- Locus Integration -->
+    <div class="locus-section fade-section" id="locus-section">
+      <div class="section-label">Locus Integration</div>
+      <div class="locus-grid">
+        <div class="locus-feat">
+          <div class="feat-check">[x]</div>
+          <div class="feat-name">Agent Wallets</div>
+          <div class="feat-desc">3 autonomous Locus wallets on Base. Agents hold, send, and receive USDC independently.</div>
+          <span class="feat-tag core">core</span>
+        </div>
+        <div class="locus-feat">
+          <div class="feat-check">[x]</div>
+          <div class="feat-name">Checkout Session Escrow</div>
+          <div class="feat-desc">Funds locked via checkout sessions. Worker preflight verifies. Payment released on delivery.</div>
+          <span class="feat-tag bonus">bonus</span>
+        </div>
+        <div class="locus-feat">
+          <div class="feat-check">[x]</div>
+          <div class="feat-name">Pay-Per-Use Wrapped APIs</div>
+          <div class="feat-desc">Exa, Firecrawl, Gemini, Grok through Locus. Each call billed in USDC.</div>
+          <span class="feat-tag bonus">bonus</span>
+        </div>
+        <div class="locus-feat">
+          <div class="feat-check">[x]</div>
+          <div class="feat-name">Spending Controls</div>
+          <div class="feat-desc">Approval thresholds and allowance caps. Payments above threshold require human approval.</div>
+          <span class="feat-tag bonus">bonus</span>
+        </div>
+        <div class="locus-feat">
+          <div class="feat-check">[x]</div>
+          <div class="feat-name">On-Chain Auditability</div>
+          <div class="feat-desc">Every payment is a real USDC transfer on Base, verifiable on BaseScan.</div>
+          <span class="feat-tag bonus">bonus</span>
+        </div>
+        <div class="locus-feat">
+          <div class="feat-check">[x]</div>
+          <div class="feat-name">Email Escrow Fallback</div>
+          <div class="feat-desc">If checkout escrow fails, agents fall back to Locus email escrow.</div>
+          <span class="feat-tag bonus">bonus</span>
+        </div>
+        <div class="locus-feat">
+          <div class="feat-check">[x]</div>
+          <div class="feat-name">Self-Registering Wallets</div>
+          <div class="feat-desc">Agents self-register via Locus API. Setup script handles wallet deployment.</div>
+          <span class="feat-tag safety">required</span>
+        </div>
+        <div class="locus-feat">
+          <div class="feat-check">[x]</div>
+          <div class="feat-name">Checkout Webhooks</div>
+          <div class="feat-desc">Real-time webhook notifications from Locus on escrow status changes. Drives live dashboard updates via SSE.</div>
+          <span class="feat-tag bonus">bonus</span>
+        </div>
+        <div class="locus-feat">
+          <div class="feat-check">[x]</div>
+          <div class="feat-name">Direct Wallet Payments</div>
+          <div class="feat-desc">Agent-to-agent USDC transfers via Locus sendPayment. Falls back from escrow when checkout sessions are unavailable.</div>
+          <span class="feat-tag core">core</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Vision -->
+    <div class="vision-section fade-section" id="vision-section">
+      <h2>The future of agent commerce</h2>
+      <div class="vision-subtitle">The autonomous agent economy</div>
+      <p class="vision-lead">Gekko proves AI agents can discover, hire, and pay each other without human intervention. Every payment is real USDC on Base. Every decision is auditable. This isn't a simulation.</p>
+
+      <div class="vision-grid">
+        <div class="vision-card">
+          <div class="vision-card-icon">&#9670;</div>
+          <h3>Agent Marketplace</h3>
+          <p>Deploy an agent, register a service, start earning USDC. The orchestrator discovers and hires automatically.</p>
+          <span class="v-tag today">working today</span>
+        </div>
+        <div class="vision-card">
+          <div class="vision-card-icon">&#9671;</div>
+          <h3>Escrow-First Payments</h3>
+          <p>Funds locked before work starts. Workers verify via preflight. Payment releases only on delivery.</p>
+          <span class="v-tag today">working today</span>
+        </div>
+        <div class="vision-card">
+          <div class="vision-card-icon">&#9674;</div>
+          <h3>Pay-Per-Use Intelligence</h3>
+          <p>Agents call search, scraping, and LLM APIs through Locus. Pay per call in USDC. Costs on-chain.</p>
+          <span class="v-tag today">working today</span>
+        </div>
+        <div class="vision-card">
+          <div class="vision-card-icon">&#9651;</div>
+          <h3>Competitive Bidding</h3>
+          <p>Multiple agents, same capability, different prices. Market competition drives quality up and cost down.</p>
+          <span class="v-tag next">next milestone</span>
+        </div>
+        <div class="vision-card">
+          <div class="vision-card-icon">&#9653;</div>
+          <h3>Reputation Scoring</h3>
+          <p>Track completion rates and quality on-chain. Orchestrators factor reputation into hiring decisions.</p>
+          <span class="v-tag next">next milestone</span>
+        </div>
+        <div class="vision-card">
+          <div class="vision-card-icon">&#9711;</div>
+          <h3>Cross-Network Federation</h3>
+          <p>Agents from different networks discover and transact. Locus wallets bridge them seamlessly.</p>
+          <span class="v-tag future">future vision</span>
+        </div>
+      </div>
+
+      <div class="vision-divider"></div>
+
+      <div class="vision-quote">"The next billion-dollar company will have <span>no employees</span> -- just AI agents with wallets, discovering work and getting paid."</div>
+      <div class="vision-attribution">-- The thesis behind Gekko</div>
+
+      <div class="vision-stats">
+        <div class="vision-stat"><div class="vs-num">3</div><div class="vs-label">Wallets</div></div>
+        <div class="vision-stat"><div class="vs-num">4</div><div class="vs-label">Wrapped APIs</div></div>
+        <div class="vision-stat"><div class="vs-num">9</div><div class="vs-label">Locus Features</div></div>
+        <div class="vision-stat"><div class="vs-num">100%</div><div class="vs-label">On-Chain</div></div>
+      </div>
+    </div>
+
+    <div class="footer">
+      Gekko &middot; Powered by <a href="https://paywithlocus.com" target="_blank">Locus</a> on <a href="https://base.org" target="_blank">Base</a>
+    </div>
+  </div>
+
+  <script>
+    const $ = id => document.getElementById(id);
+    let eventCount = 0;
+
+    /** Escape HTML to prevent XSS from user-supplied goal text or API data. */
+    function esc(str) {
+      if (str == null) return '';
+      const d = document.createElement('div');
+      d.appendChild(document.createTextNode(String(str)));
+      return d.innerHTML;
+    }
+
+    /** Lightweight markdown to HTML renderer — handles headings, bold, italic, lists, links, hr, code, paragraphs. */
+    function renderMarkdown(md) {
+      const escaped = esc(md);
+      return escaped
+        .split('\n\n').map(block => {
+          block = block.trim();
+          if (!block) return '';
+          // Horizontal rule
+          if (/^-{3,}$|^\*{3,}$/.test(block)) return '<hr>';
+          // Headings
+          if (/^#{1,3}\s/.test(block)) {
+            const m = block.match(/^(#{1,3})\s+(.*)/);
+            const lvl = m[1].length;
+            return `<h${lvl}>${inline(m[2])}</h${lvl}>`;
+          }
+          // Unordered list
+          if (/^[\*\-]\s/.test(block)) {
+            const items = block.split('\n').map(l => l.replace(/^\s*[\*\-]\s+/, ''));
+            return '<ul>' + items.map(i => `<li>${inline(i)}</li>`).join('') + '</ul>';
+          }
+          // Ordered list
+          if (/^\d+\.\s/.test(block)) {
+            const items = block.split('\n').map(l => l.replace(/^\s*\d+\.\s+/, ''));
+            return '<ol>' + items.map(i => `<li>${inline(i)}</li>`).join('') + '</ol>';
+          }
+          // Paragraph
+          return `<p>${inline(block)}</p>`;
+        }).join('\n');
+    }
+    function inline(s) {
+      return s
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+        .replace(/\n/g, '<br>');
+    }
+
+    function setGoal(el) {
+      $('goalIn').value = el.textContent;
+      $('goalIn').focus();
+    }
+
+    // SSE connection
+    const sse = new EventSource('/api/events/stream');
+    // Internal events to hide from timeline (fallback noise)
+    const HIDDEN_ACTIONS = new Set([
+      'escrow_failed', 'escrow_fallback', 'escrow_creating',
+      'synthesis_provider_failed', 'payment_pending_approval', 'approval_required',
+    ]);
+
+    sse.onmessage = (e) => {
+      try {
+        const ev = JSON.parse(e.data);
+        if (ev.action === 'connected') return;
+        if (!HIDDEN_ACTIONS.has(ev.action)) addTimelineEntry(ev);
+        if (ev.type === 'escrow') loadEscrows();
+        if (ev.type === 'approval') loadApprovals();
+        if (ev.action?.includes('payment')) loadBalances();
+        updateStepper(ev);
+        showEventToast(ev);
+        updateStatusBanner(ev);
+        highlightAgent(ev);
+      } catch {}
+    };
+
+    // Step mapping: SSE action -> step number
+    function updateStepper(ev) {
+      const a = ev.action;
+      if (a === 'balance_verified') setStep(1, 'done');
+      if (a === 'agent_discovered' || a === 'subtasks_planned') { setStep(2, 'done'); setStep(3, 'active'); }
+      if (a === 'escrow_created') { setStep(3, 'done'); setStep(4, 'active'); }
+      if (a === 'escrow_verified') { setStep(4, 'done'); setStep(5, 'active'); }
+      if (a === 'exa_search_completed' || a === 'firecrawl_search_completed' || a === 'research_completed') setStep(5, 'done');
+      if (a === 'escrow_released' && !stepDone6) { stepDone6 = true; setStep(6, 'done'); setStep(7, 'active'); }
+      if (a === 'synthesis_completed') setStep(7, 'done');
+      if (a === 'goal_completed') { setStep(8, 'done'); }
+      // Active states
+      if (a === 'goal_received') { setStep(1, 'active'); }
+      if (a === 'dispatching_task' && ev.task?.includes('Research')) setStep(5, 'active');
+      if (a === 'dispatching_task' && ev.task?.includes('Synth')) setStep(7, 'active');
+      if (a === 'payment_initiated' || a === 'payment_sent' || a === 'payment_completed') {
+        if (stepDone6) setStep(8, 'active');
+        else setStep(6, 'active');
+      }
+    }
+    let stepDone6 = false;
+    function setStep(n, state) {
+      const row = $(`step-${n}`);
+      if (!row) return;
+      // Never downgrade a completed step back to active
+      if (state === 'active' && row.classList.contains('done')) return;
+      const ind = row.querySelector('.step-indicator');
+      row.className = `step-row ${state}`;
+      ind.className = `step-indicator ${state}`;
+      if (state === 'done') ind.textContent = 'ok';
+      else if (state === 'error') ind.textContent = '!';
+    }
+    function resetStepper() {
+      stepDone6 = false;
+      for (let i = 1; i <= 8; i++) {
+        const row = $(`step-${i}`);
+        if (!row) continue;
+        const ind = row.querySelector('.step-indicator');
+        row.className = 'step-row';
+        ind.className = 'step-indicator waiting';
+        ind.textContent = String(i);
+      }
+    }
+
+    // ── Toast Notifications ──
+    const TOAST_EVENTS = {
+      goal_received:        { icon: 'goal',    title: 'Goal Received',       msg: ev => ev.goal?.slice(0, 60) },
+      balance_verified:     { icon: 'done',    title: 'Balance Verified',    msg: ev => `$${parseFloat(ev.balance || 0).toFixed(2)} USDC available` },
+      subtasks_planned:     { icon: 'goal',    title: 'Tasks Planned',       msg: ev => `${ev.count} subtasks created` },
+      agent_discovered:     { icon: 'done',    title: 'Agent Discovered',    msg: ev => `${ev.agent || ev.service} selected from registry` },
+      escrow_created:       { icon: 'escrow',  title: 'Escrow Created',      msg: ev => `$${parseFloat(ev.amount || 0).toFixed(2)} locked for ${ev.seller || 'worker'}` },
+      escrow_verified:      { icon: 'escrow',  title: 'Escrow Verified',     msg: ev => `${ev.agent} confirmed escrow` },
+      escrow_released:      { icon: 'payment', title: 'Escrow Released',     msg: ev => `$${parseFloat(ev.amount || 0).toFixed(2)} paid to ${ev.seller || 'worker'}` },
+      dispatching_task:     { icon: 'api',     title: 'Task Dispatched',     msg: ev => `${ev.task?.slice(0, 50)}` },
+      research_completed:   { icon: 'done',    title: 'Research Complete',   msg: ev => `${ev.providers?.join(', ') || 'search'} finished` },
+      synthesis_completed:  { icon: 'done',    title: 'Report Synthesized',  msg: ev => `via ${ev.provider || 'LLM'}` },
+      payment_completed:    { icon: 'payment', title: 'Payment Sent',        msg: ev => `$${parseFloat(ev.amount || 0).toFixed(2)} USDC on Base` },
+      goal_completed:       { icon: 'done',    title: 'Goal Complete',       msg: ev => `${ev.tasksCompleted} tasks, $${parseFloat(ev.totalSpent || 0).toFixed(2)} spent` },
+      api_call:             { icon: 'api',     title: 'API Call',            msg: ev => `${ev.provider}/${ev.endpoint}` },
+    };
+
+    function showEventToast(ev) {
+      const cfg = TOAST_EVENTS[ev.action];
+      if (!cfg) return;
+      const container = $('toasts');
+      const toast = document.createElement('div');
+      toast.className = 'toast';
+      const amountHtml = ev.amount ? `<span class="toast-amount">$${parseFloat(ev.amount).toFixed(2)}</span>` : '';
+      toast.innerHTML = `
+        <div class="toast-icon ${cfg.icon}">&bull;</div>
+        <div class="toast-body">
+          <div class="toast-title">${esc(cfg.title)}</div>
+          <div class="toast-msg">${esc(cfg.msg(ev) || '')}</div>
+        </div>
+        ${amountHtml}`;
+      container.prepend(toast);
+      setTimeout(() => toast.remove(), 5000);
+    }
+
+    // ── Status Banner ──
+    const STATUS_MAP = {
+      goal_received:       { phase: 'Verifying balance', detail: 'checking orchestrator wallet...' },
+      balance_verified:    { phase: 'Planning subtasks', detail: 'decomposing goal...' },
+      subtasks_planned:    { phase: 'Discovering agents', detail: 'querying service registry...' },
+      agent_discovered:    { phase: 'Creating escrow', detail: 'locking funds via Locus checkout...' },
+      escrow_created:      { phase: 'Verifying escrow', detail: 'worker preflight check...' },
+      escrow_verified:     { phase: 'Working', detail: '' },
+      dispatching_task:    { phase: 'Working', detail: '' },
+      research_started:    { phase: 'Researching', detail: 'searching via Exa + Firecrawl...' },
+      exa_search_completed:{ phase: 'Researching', detail: 'Exa search complete, continuing...' },
+      firecrawl_search_completed: { phase: 'Researching', detail: 'Firecrawl complete' },
+      research_completed:  { phase: 'Releasing payment', detail: 'research delivered, paying researcher...' },
+      escrow_released:     { phase: 'Payment released', detail: 'USDC transferred on Base' },
+      synthesis_started:   { phase: 'Synthesizing', detail: 'generating report via LLM...' },
+      synthesis_completed: { phase: 'Releasing payment', detail: 'report delivered, paying writer...' },
+      payment_completed:   { phase: 'Payment confirmed', detail: 'on-chain USDC transfer complete' },
+      goal_completed:      { phase: 'Complete', detail: 'all tasks finished' },
+    };
+
+    function updateStatusBanner(ev) {
+      const cfg = STATUS_MAP[ev.action];
+      if (!cfg) return;
+      const banner = $('statusBanner');
+      banner.classList.add('active');
+      $('statusPhase').textContent = cfg.phase;
+      const detailEl = $('statusDetail');
+      if (ev.action === 'dispatching_task') {
+        detailEl.textContent = ev.task?.includes('Research') ? 'dispatching to researcher...' : 'dispatching to writer...';
+      } else {
+        detailEl.textContent = cfg.detail;
+      }
+      if (ev.action === 'goal_completed') {
+        setTimeout(() => banner.classList.remove('active'), 8000);
+      }
+    }
+
+    // ── Agent Highlighting ──
+    function highlightAgent(ev) {
+      const name = (ev.agent || '').toLowerCase();
+      let cardId = null;
+      if (name.includes('orch')) cardId = 'c-o';
+      else if (name.includes('res')) cardId = 'c-r';
+      else if (name.includes('wri')) cardId = 'c-w';
+      if (!cardId) return;
+      const card = $(cardId);
+      card.classList.add('active-agent');
+      clearTimeout(card._hlTimeout);
+      card._hlTimeout = setTimeout(() => card.classList.remove('active-agent'), 3000);
+    }
+
+    function agentCls(name) {
+      if (!name) return 'm';
+      const n = name.toLowerCase();
+      if (n.includes('orch')) return 'o';
+      if (n.includes('res')) return 'r';
+      if (n.includes('wri')) return 'w';
+      if (n.includes('locus')) return 'l';
+      return 'm';
+    }
+
+    function eventIconClass(action, type) {
+      if (type === 'payment' || action?.includes('payment')) return 'ic-pay';
+      if (type === 'escrow' || action?.includes('escrow')) return 'ic-esc';
+      if (type === 'approval' || action?.includes('approval')) return 'ic-appr';
+      if (type === 'api' || action?.includes('api')) return 'ic-api';
+      if (action?.includes('goal')) return 'ic-goal';
+      return '';
+    }
+
+    function detailClass() { return ''; }
+
+    function addTimelineEntry(ev) {
+      const tl = $('timeline');
+      if (tl.querySelector('.empty')) tl.innerHTML = '';
+      eventCount++;
+      $('tl-count').textContent = eventCount;
+
+      const row = document.createElement('div');
+      row.className = 'tl-entry';
+      const time = new Date(ev.timestamp).toLocaleTimeString('en-US', { hour12: false });
+      const cls = agentCls(ev.agent);
+      const icCls = eventIconClass(ev.action, ev.type);
+      const dcls = detailClass(ev.action, ev.type);
+
+      let detail = '';
+      if (ev.amount) detail = `${esc(ev.amount)} USDC`;
+      else if (ev.provider) detail = `${esc(ev.provider)}/${esc(ev.endpoint)}`;
+      else if (ev.query) detail = esc(ev.query?.slice(0, 50));
+      else if (ev.task) detail = esc(ev.task?.slice(0, 50));
+      else if (ev.serviceName) detail = `${esc(ev.serviceName)} @ $${esc(ev.price)}`;
+      else if (ev.error) detail = esc(ev.error?.slice(0, 80));
+      else if (ev.sessionId) detail = `session:${esc(ev.sessionId?.slice(0, 8))}`;
+
+      row.innerHTML = `<span class="tl-icon ${icCls}">&bull;</span><span class="tl-time">${esc(time)}</span><span class="tl-agent ${cls}">${esc(ev.agent || 'mesh')}</span><span class="tl-act">${esc(ev.action)}</span><span class="tl-det ${dcls}">${detail}</span>`;
+      tl.appendChild(row);
+      tl.scrollTop = tl.scrollHeight;
+    }
+
+    async function loadBalances() {
+      try {
+        const r = await fetch('/api/balances');
+        const d = await r.json();
+        const map = { orchestrator: 'o', researcher: 'r', writer: 'w' };
+        for (const [key, info] of Object.entries(d.balances)) {
+          const bal = info?.usdc_balance ?? '?';
+          const addr = info?.wallet_address ?? '';
+          const id = map[key];
+          if (id) {
+            $(`b-${id}`).textContent = `${parseFloat(bal).toFixed(2)} USDC`;
+            const link = $(`l-${id}`);
+            link.textContent = addr ? addr.slice(0, 6) + '...' + addr.slice(-4) : '';
+            link.href = `https://basescan.org/address/${addr}`;
+          }
+        }
+      } catch {}
+    }
+
+    async function loadServices() {
+      try {
+        const r = await fetch('/api/registry');
+        const d = await r.json();
+        const el = $('svcList');
+        $('svc-count').textContent = d.services.length;
+        if (d.services.length === 0) { el.innerHTML = '<div class="empty">no services registered</div>'; return; }
+        el.innerHTML = d.services.map(s => `
+          <div class="svc">
+            <div>
+              <div class="svc-name">${esc(s.serviceName)}</div>
+              <div class="svc-desc">${esc(s.description.slice(0, 90))}</div>
+              <div class="svc-caps">${(s.capabilities || []).map(c => `<span class="cap-tag">${esc(c)}</span>`).join('')}</div>
+              <div class="svc-agent">${esc(s.agentName)}</div>
+            </div>
+            <div class="svc-price">$${esc(s.price.toFixed(2))}</div>
+          </div>
+        `).join('');
+      } catch {}
+    }
+
+    async function loadApprovals() {
+      try {
+        const r = await fetch('/api/approvals');
+        const d = await r.json();
+        const el = $('aprList');
+        $('apr-count').textContent = d.approvals.length;
+        if (d.approvals.length === 0) { el.innerHTML = '<div class="empty">no payments flagged</div>'; return; }
+        el.innerHTML = `<div style="font-size:11px;color:rgba(255,255,255,0.35);padding:0 2px 10px;line-height:1.5">Locus spending controls held these payments for review.</div>` +
+        d.approvals.map(a => `
+          <div class="appr">
+            <div class="appr-header">
+              <span class="appr-agent">${esc(a.agent)}</span>
+              <span class="appr-amount">$${esc(a.amount)}</span>
+            </div>
+            <div class="appr-task">${esc(a.task)}</div>
+            <div style="font-size:9px;color:rgba(255,255,255,0.2);margin-top:6px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px">Held by Locus</div>
+          </div>
+        `).join('');
+      } catch {}
+    }
+
+    async function loadEscrows() {
+      try {
+        const r = await fetch('/api/escrows');
+        const d = await r.json();
+        const el = $('escList');
+        $('esc-count').textContent = d.escrows.length;
+        $('s-es').textContent = d.escrows.length;
+        if (d.escrows.length === 0) { el.innerHTML = '<div class="empty">no escrows yet</div>'; return; }
+        el.innerHTML = d.escrows.map(e => {
+          const stCls = e.status.includes('release') ? 'released' : e.status.includes('fail') ? 'failed' : 'pending';
+          const phases = ['created', 'preflight', 'work', 'released'];
+          const phaseLabels = ['Created', 'Preflight', 'Work', 'Released'];
+          const statusOrder = { pending: 0, preflight_ok: 1, preflight_failed: 1, released: 3 };
+          const currentPhase = statusOrder[e.status] ?? 0;
+          const activePhase = e.status === 'released' ? 4 : (e.status === 'preflight_ok' ? 2 : (e.status === 'pending' ? 1 : currentPhase));
+
+          const lifecycleHtml = phases.map((p, i) => {
+            const dotCls = i < activePhase ? 'done' : i === activePhase ? 'active' : 'waiting';
+            const lblCls = i < activePhase ? 'done' : '';
+            const connector = i < phases.length - 1
+              ? `<div class="esc-phase-connector ${i < activePhase ? 'done' : ''}"></div>`
+              : '';
+            return `<div class="esc-phase"><div class="esc-phase-dot ${dotCls}"></div><span class="esc-phase-label ${lblCls}">${phaseLabels[i]}</span></div>${connector}`;
+          }).join('');
+
+          const ts = e.createdAt ? new Date(e.createdAt).toLocaleTimeString() : '';
+          const paid = e.paidAt ? new Date(e.paidAt).toLocaleTimeString() : '';
+
+          return `<div class="esc">
+            <div class="esc-header">
+              <span class="esc-status ${stCls}">${esc(e.status)}</span>
+              <span class="esc-amount">$${esc(String(e.amount))}</span>
+            </div>
+            <div class="esc-flow">
+              <span class="esc-flow-agent buyer">${esc(e.buyerAgent)}</span>
+              <span class="esc-flow-arrow">&rarr;</span>
+              <span class="esc-flow-agent seller">${esc(e.sellerAgent)}</span>
+            </div>
+            ${e.description ? `<div class="esc-desc">${esc(e.description)}</div>` : ''}
+            <div class="esc-lifecycle">${lifecycleHtml}</div>
+            <div class="esc-meta">
+              ${ts ? `<span>Created ${esc(ts)}</span>` : ''}
+              ${paid ? `<span>Paid ${esc(paid)}</span>` : ''}
+              ${e.checkoutUrl ? `<a href="${esc(e.checkoutUrl)}" target="_blank" rel="noopener">Checkout &rarr;</a>` : ''}
+            </div>
+          </div>`;
+        }).join('');
+      } catch {}
+    }
+
+    // Wallet-to-name mapping, populated dynamically from /api/agents
+    const WALLET_NAMES = {
+      '0x3c5cbe28eca3b96023c45d3f877da834f1c7d5fa': 'Locus API',
+    };
+    (async () => {
+      try {
+        const r = await fetch('/api/agents');
+        const d = await r.json();
+        d.agents.forEach(a => {
+          if (a.wallet) {
+            const label = a.role.charAt(0).toUpperCase() + a.role.slice(1);
+            WALLET_NAMES[a.wallet.toLowerCase()] = label;
+            WALLET_NAMES['_role_' + a.role] = a.wallet.toLowerCase();
+          }
+        });
+      } catch {}
+    })();
+
+    function walletLabel(addr) {
+      if (!addr) return '?';
+      const name = WALLET_NAMES[addr.toLowerCase()];
+      return name || addr.slice(0, 6) + '...' + addr.slice(-4);
+    }
+    function walletLink(addr, label) {
+      if (!addr) return esc(label || '?');
+      const display = label || walletLabel(addr);
+      return `<a href="https://basescan.org/address/${encodeURIComponent(addr)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;border-bottom:1px dashed rgba(255,255,255,0.08);transition:border-color 0.2s" onmouseover="this.style.borderColor='rgba(255,255,255,0.3)'" onmouseout="this.style.borderColor='rgba(255,255,255,0.08)'">${esc(display)}</a>`;
+    }
+
+    async function loadTransactions() {
+      try {
+        const r = await fetch('/api/transactions');
+        const d = await r.json();
+        const el = $('txnList');
+        const txns = d.transactions || [];
+        $('txn-count').textContent = txns.length;
+        if (txns.length === 0) { el.innerHTML = '<div class="empty">no transactions yet</div>'; return; }
+        el.innerHTML = txns.map(tx => {
+          const agentCls = tx._agent === 'orchestrator' ? 'o' : tx._agent === 'researcher' ? 'r' : 'w';
+          const statusCls = (tx.status || '').toLowerCase().includes('confirm') ? 'confirmed' : (tx.status || '').toLowerCase().includes('queue') ? 'queued' : 'failed';
+          const toLabel = walletLabel(tx.to_address);
+          const toLink = walletLink(tx.to_address, toLabel);
+          const fromAddr = WALLET_NAMES['_role_' + tx._agent] || '';
+          const fromLink = fromAddr ? walletLink(fromAddr, tx._agent) : esc(tx._agent);
+          const memo = tx.memo || 'Transfer';
+          const hash = tx.tx_hash ? tx.tx_hash.slice(0, 10) + '...' : '';
+          const time = new Date(tx.created_at).toLocaleTimeString('en-US', { hour12: false });
+          return `<div class="txn">
+            <span class="txn-agent ${agentCls}">${fromLink}</span>
+            <span style="color:rgba(255,255,255,0.15);font-size:9px">${esc(time)}</span>
+            <span style="color:rgba(255,255,255,0.25);font-size:9px">&rarr; ${toLink}</span>
+            <span class="txn-memo">${esc(memo)}</span>
+            <span class="txn-amount">$${parseFloat(tx.amount_usdc || 0).toFixed(2)}</span>
+            <span class="txn-status ${statusCls}">${esc(tx.status)}</span>
+            ${tx.tx_hash ? `<span class="txn-hash"><a href="https://basescan.org/tx/${encodeURIComponent(tx.tx_hash)}" target="_blank">${esc(hash)}</a></span>` : ''}
+          </div>`;
+        }).join('');
+      } catch {}
+    }
+
+    async function loadReasoning() {
+      try {
+        const r = await fetch('/api/reasoning');
+        const d = await r.json();
+        const el = $('reasonList');
+        const items = d.reasoning || [];
+        $('rsn-count').textContent = items.length;
+        if (items.length === 0) { el.innerHTML = '<div class="empty">run a goal to see agent reasoning</div>'; return; }
+        el.innerHTML = items.map(ev => {
+          const cls = agentCls(ev.agent);
+          const reasoning = ev.reasoning || ev.goal || ev.task || ev.description || '';
+          const amount = ev.amount ? ` <span style="color:#fff;font-family:'JetBrains Mono',monospace;font-weight:700">$${esc(ev.amount)} USDC</span>` : '';
+          return `<div class="reason-entry">
+            <span class="reason-agent ${cls}">${esc(ev.agent || 'mesh')}</span>
+            <span class="reason-action">${esc(ev.action)}</span>
+            <span class="reason-text">${esc(reasoning)}${amount}</span>
+          </div>`;
+        }).join('');
+      } catch {}
+    }
+
+    async function run() {
+      const goal = $('goalIn').value.trim();
+      if (!goal) return;
+      const budget = parseFloat($('budIn').value) || 1.0;
+      const maxPerTask = parseFloat($('taskIn').value) || 0.25;
+
+      $('runBtn').disabled = true;
+      $('runBtn').textContent = 'RUNNING...';
+      $('s-st').textContent = 'running';
+      $('s-bud').textContent = `$${budget.toFixed(2)}`;
+      $('s-sp').textContent = '$0.00';
+      $('reportOut').innerHTML = '<div class="empty pulsing">agents are researching and synthesizing...</div>';
+
+      // Show stepper and status banner
+      resetStepper();
+      $('stepper').classList.add('active');
+      $('statusBanner').classList.add('active');
+      $('statusPhase').textContent = 'Starting';
+      $('statusDetail').textContent = 'submitting goal to orchestrator...';
+      $('toasts').innerHTML = '';
+
+      // Animate
+      document.querySelectorAll('.acard').forEach(c => c.classList.add('glow'));
+      document.querySelectorAll('.arr').forEach(a => a.classList.add('on'));
+
+      try {
+        const r = await fetch('/api/goal', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ goal, budget, maxPerTask }),
+        });
+        const data = await r.json();
+
+        if (data.success) {
+          const s = data.audit?.summary;
+          if (s) {
+            $('s-sp').textContent = `$${(s.totalSpent || 0).toFixed(2)}`;
+            $('s-tk').textContent = s.completed || 0;
+          }
+          let report = data.report?.report || 'No report generated.';
+          try {
+            const p = JSON.parse(report);
+            report = p?.data?.choices?.[0]?.message?.content || p?.choices?.[0]?.message?.content || report;
+          } catch {}
+          $('reportOut').innerHTML = renderMarkdown(report);
+          $('s-st').textContent = 'done';
+        } else {
+          $('reportOut').textContent = data.error || 'Failed';
+          $('s-st').textContent = 'error';
+        }
+      } catch (err) {
+        $('reportOut').textContent = err.message;
+        $('s-st').textContent = 'error';
+      }
+
+      document.querySelectorAll('.acard').forEach(c => { c.classList.remove('glow'); c.classList.remove('active-agent'); });
+      document.querySelectorAll('.arr').forEach(a => a.classList.remove('on'));
+      $('runBtn').disabled = false;
+      $('runBtn').textContent = 'RUN DISPATCH';
+      loadBalances();
+      loadEscrows();
+      loadApprovals();
+      loadReasoning();
+      setTimeout(loadTransactions, 3000);
+    }
+
+    $('goalIn').addEventListener('keydown', e => { if (e.key === 'Enter') run(); });
+
+    loadBalances();
+    loadServices();
+    loadApprovals();
+    loadEscrows();
+    loadTransactions();
+    setInterval(loadBalances, 30000);
+    setInterval(loadTransactions, 60000);
+
+    // ── Section Fade-In (IntersectionObserver) ──
+    const fadeObserver = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+        }
+      });
+    }, { threshold: 0.1 });
+    document.querySelectorAll('.fade-section').forEach(el => fadeObserver.observe(el));
+
+    // ── Smooth scroll for nav links ──
+    document.querySelectorAll('.nav-link').forEach(link => {
+      link.addEventListener('click', (e) => {
+        const href = link.getAttribute('href');
+        if (href && href.startsWith('#')) {
+          e.preventDefault();
+          const target = document.querySelector(href);
+          if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      });
+    });
+  </script>
+
+  <!-- Dot Matrix WebGL Background -->
+  <script>
+  (function() {
+    const canvas = document.getElementById('dotMatrix');
+    const gl = canvas.getContext('webgl2');
+    if (!gl) return;
+
+    function resize() {
+      canvas.width = window.innerWidth * 2;
+      canvas.height = window.innerHeight * 2;
+      gl.viewport(0, 0, canvas.width, canvas.height);
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    const vsSource = `#version 300 es
+      in vec2 a_position;
+      uniform vec2 u_resolution;
+      out vec2 fragCoord;
+      void main() {
+        gl_Position = vec4(a_position, 0.0, 1.0);
+        fragCoord = (a_position + 1.0) * 0.5 * u_resolution;
+        fragCoord.y = u_resolution.y - fragCoord.y;
+      }`;
+
+    const fsSource = `#version 300 es
+      precision mediump float;
+      in vec2 fragCoord;
+      uniform float u_time;
+      uniform vec2 u_resolution;
+      out vec4 fragColor;
+
+      float PHI = 1.61803398874989484820459;
+      float random(vec2 xy) {
+        return fract(tan(distance(xy * PHI, xy) * 0.5) * xy.x);
+      }
+
+      void main() {
+        float u_total_size = 24.0;
+        float u_dot_size = 6.0;
+
+        vec3 color1 = vec3(1.0, 1.0, 1.0);
+        vec3 color2 = vec3(0.8, 0.8, 0.8);
+
+        vec2 st = fragCoord.xy;
+        st.x -= abs(floor((mod(u_resolution.x, u_total_size) - u_dot_size) * 0.5));
+        st.y -= abs(floor((mod(u_resolution.y, u_total_size) - u_dot_size) * 0.5));
+
+        float opacity = step(0.0, st.x) * step(0.0, st.y);
+        vec2 st2 = vec2(int(st.x / u_total_size), int(st.y / u_total_size));
+
+        float frequency = 5.0;
+        float show_offset = random(st2);
+        float rand = random(st2 * floor((u_time / frequency) + show_offset + frequency));
+
+        float opacities[10] = float[](0.03, 0.03, 0.03, 0.05, 0.05, 0.05, 0.06, 0.06, 0.06, 0.08);
+        opacity *= opacities[int(rand * 10.0)];
+        opacity *= 1.0 - step(u_dot_size / u_total_size, fract(st.x / u_total_size));
+        opacity *= 1.0 - step(u_dot_size / u_total_size, fract(st.y / u_total_size));
+
+        vec3 color = mix(color1, color2, show_offset);
+
+        // Reveal animation from center
+        float animation_speed = 0.4;
+        vec2 center_grid = u_resolution / 2.0 / u_total_size;
+        float dist = distance(center_grid, st2);
+        float timing = dist * 0.01 + (random(st2) * 0.15);
+        opacity *= step(timing, u_time * animation_speed);
+        opacity *= clamp((1.0 - step(timing + 0.1, u_time * animation_speed)) * 1.25, 1.0, 1.25);
+
+        fragColor = vec4(color * opacity, opacity);
+      }`;
+
+    function compile(type, src) {
+      const s = gl.createShader(type);
+      gl.shaderSource(s, src);
+      gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+        console.error(gl.getShaderInfoLog(s));
+        return null;
+      }
+      return s;
+    }
+
+    const vs = compile(gl.VERTEX_SHADER, vsSource);
+    const fs = compile(gl.FRAGMENT_SHADER, fsSource);
+    const prog = gl.createProgram();
+    gl.attachShader(prog, vs);
+    gl.attachShader(prog, fs);
+    gl.linkProgram(prog);
+    gl.useProgram(prog);
+
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+
+    const aPos = gl.getAttribLocation(prog, 'a_position');
+    gl.enableVertexAttribArray(aPos);
+    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+    const uTime = gl.getUniformLocation(prog, 'u_time');
+    const uRes = gl.getUniformLocation(prog, 'u_resolution');
+
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+
+    const start = performance.now();
+    function frame() {
+      const t = (performance.now() - start) / 1000;
+      gl.uniform1f(uTime, t);
+      gl.uniform2f(uRes, canvas.width, canvas.height);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      requestAnimationFrame(frame);
+    }
+    frame();
+  })();
+  </script>
+</body>
+</html>
