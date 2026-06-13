@@ -140,23 +140,6 @@ Worker creates Locus checkout session (merchant/seller)
 
 Fallback cascade: checkout escrow → direct wallet payment (with 2s retry) → email escrow. Three independent payment methods ensure no silent fund loss.
 
-## Locus Integration (12 features)
-
-| # | Feature | How Gekko Uses It |
-|---|---------|---------------------|
-| 1 | Agent Wallets | 4 autonomous wallets on Base, each with own API key |
-| 2 | Checkout Session Escrow | Task-scoped fund isolation — worker creates, orchestrator pays |
-| 3 | @withlocus/checkout-react SDK | Embedded checkout UI, popup mode, useLocusCheckout hook |
-| 4 | Payment Router | On-chain USDC routing via contract `0x3418...7806` |
-| 5 | Spending Controls | Approval thresholds + allowance caps, approval URLs in dashboard |
-| 6 | Pay-Per-Use Wrapped APIs | Exa, Firecrawl, Gemini, Grok — each call billed in USDC |
-| 7 | Email Escrow Fallback | Claimable USDC via email link as 3rd-tier payment method |
-| 8 | Checkout Webhooks | HMAC-SHA256 verified session paid/expired events |
-| 9 | Receipt Config | Structured receipts with line items, seller name, support email |
-| 10 | On-Chain Auditability | Every payment verifiable on BaseScan with tx hash links |
-| 11 | Locus Feedback API | Post-goal usage reporting to Locus |
-| 12 | Self-Registering Wallets | Agents self-register via Locus beta API, no account needed |
-
 ## Security
 
 - Rate limiting: 15s cooldown, 10 goals/hr, per-IP tracking
