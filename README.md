@@ -1,246 +1,228 @@
 # Gekko
 
-Autonomous AI agents that discover, hire, and pay each other in USDC on Base.
+Autonomous AI agent marketplace with on-chain USDC payments on Base.
 
-Powered by [Locus](https://paywithlocus.com) payment infrastructure.
+Built for the **MetaMask Smart Accounts × 1Shot API × Venice AI** hackathon.
 
 ---
 
-## What is Gekko?
+## What It Does
 
-Gekko is an autonomous agent-to-agent payment marketplace. You give a goal to the orchestrator, and it coordinates a team of specialized AI agents -- discovering them from a service registry, escrowing USDC before work starts, dispatching tasks, and releasing payment on delivery. Every dollar is tracked on-chain.
+You submit a research goal. Four autonomous AI agents coordinate: the orchestrator plans, the researcher finds information, the validator fact-checks it, and the writer synthesizes a full report. Every agent gets paid in USDC — no human in the loop after you hit Launch.
 
-No human touches the money after the goal is submitted. Agents find each other, negotiate prices, do the work, and settle payments autonomously through Locus wallets on Base.
+**Two payment layers run in parallel:**
 
-## How It Works
+| Layer | Chain | How |
+|-------|-------|-----|
+| Agent-to-agent | Base Sepolia | ethers.js direct USDC transfers |
+| User → Agents | Base mainnet | ERC-7710 delegation via MetaMask + 1Shot |
 
-```
-User submits goal
-        |
-        v
-  [Orchestrator]
-   - Verifies wallet balance via Locus API
-   - Queries service registry for capable agents
-   - Selects cheapest provider per task (reputation breaks ties)
-        |
-        v
-  [Worker Creates Escrow]
-   - Worker agent creates a Locus checkout session (merchant/seller)
-   - Orchestrator verifies escrow via preflight (buyer)
-        |
-        v
-  [Researcher Agent]          [Validator Agent]          [Writer Agent]
-   - Searches via Exa           - Fact-checks findings     - Synthesizes via Gemini
-   - Scrapes via Firecrawl      - Rates confidence         - Falls back to Grok
-   - All calls billed USDC      - Quality gate             - All calls billed USDC
-        |                            |                          |
-        v                            v                          v
-  [Orchestrator Pays]          [Orchestrator Pays]        [Orchestrator Pays]
-   - USDC on Base               - USDC on Base             - USDC on Base
-        |
-        v
-  Report delivered with full audit trail
-```
+The on-chain flow is gasless for the user — you sign a delegation once, and 1Shot's relayer executes the USDC transfers on your behalf with no ETH required.
 
-## Locus Integration
-
-Gekko uses Locus as its core payment layer. Remove Locus and the entire product stops working.
-
-**Agent Wallets**: Four autonomous agent wallets on Base, each with its own Locus API key. Agents hold, send, and receive USDC independently.
-
-**Checkout Session Escrow (Task-Scoped Fund Isolation)**: Each subtask gets its own Locus checkout session. Workers create sessions as merchants; the orchestrator pays as buyer after work is delivered. Funds are isolated per-task -- if one task fails, other escrowed funds remain safe. Sessions are verified via preflight before work begins and confirmed on-chain via polling.
-
-**@withlocus/checkout-react SDK**: The dashboard integrates the official Locus Checkout React SDK with embedded mode, popup mode, and the `useLocusCheckout` hook for programmatic control. Paid sessions display the Locus checkout confirmation embed.
-
-**Payment Router**: Checkout sessions route through the Locus Payment Router contract (`0x3418...7806`) on Base mainnet, enabling on-chain USDC settlement via the `CheckoutPayment` event.
-
-**Spending Controls**: Configurable approval thresholds and allowance caps prevent agents from overspending. Payments exceeding the threshold return an approval URL for human review, surfaced directly in the dashboard.
-
-**Pay-Per-Use Wrapped APIs**: Agents call external services (Exa, Firecrawl, Gemini, Grok) through Locus's wrapped API proxy. Each call is automatically billed in USDC to the calling agent's wallet -- no upstream API keys needed.
-
-**Email Escrow Fallback**: If checkout escrow and direct wallet payment both fail, agents fall back to Locus email escrow. The recipient claims USDC via an email link -- a novel payment rail for agent-to-agent settlement.
-
-**Checkout Webhooks**: HMAC-SHA256 verified webhooks from Locus on session paid/expired events drive real-time dashboard updates via SSE.
-
-**Receipt Config**: Checkout sessions include structured receipts with line items, seller name, and support contact for full audit trail transparency.
-
-**On-Chain Auditability**: Every payment between agents is a real USDC transfer on Base, verifiable on BaseScan. The dashboard displays transaction hashes with direct links. A dedicated reasoning log shows why each payment was made, not just the transaction data.
-
-**Locus Feedback API**: After each goal completes, the orchestrator submits usage feedback to Locus with task counts and spend totals.
-
-**Self-Registering Wallets**: Agents self-register via the Locus beta API. The setup script handles wallet deployment and credential management.
+---
 
 ## Architecture
 
-Gekko is designed around four architectural principles:
-
-1. **Every agent owns its wallet.** Each agent has its own Locus API key and wallet address. No shared credentials, no central treasury. Agents pay for their own API calls.
-2. **Payments are escrow-first.** Workers create Locus checkout sessions as merchants. The orchestrator verifies via preflight and pays after delivery.
-3. **Discovery is marketplace-driven.** The orchestrator doesn't hardcode which agent to use. It queries the service registry and picks the cheapest capable provider.
-4. **Everything is auditable.** Every action emits a structured event with reasoning context. The full decision trail is available at `/api/reasoning`.
-
 ```
-src/
-  config.js          Centralized agent definitions, rate limits, budget caps
-  server.js          Express server, API routes, SSE streaming, webhook handler
-  locus.js           Locus API client (wallets, payments, checkout, wrapped APIs, feedback)
-  escrow.js          Escrow manager wrapping Locus checkout sessions
-  registry.js        Service marketplace for agent discovery and pricing
-  event-bus.js       Global event emitter for real-time timeline
-  agents/
-    base-agent.js    Base class: wallet, payments, email escrow, API calls, audit trail
-    orchestrator.js  Discovers agents, manages budget, escrows, dispatches work
-    research-agent.js  Web search via Exa + Firecrawl (Locus wrapped APIs)
-    validator-agent.js Fact-checks research via Grok + Gemini (Locus wrapped APIs)
-    writer-agent.js  Report synthesis via Gemini + Grok (Locus wrapped APIs)
-tests/
-  orchestrator.test.js  45 unit tests (node --test)
-app/
-  page.tsx           Next.js / React dashboard with SSE, @withlocus/checkout-react, Tailwind
-```
-
-To add a new agent: define it in `config.js`, create its class extending `BaseAgent`, and register its service. The orchestrator will discover and hire it automatically.
-
-## Agents
-
-| Agent | Role | Wallet | What It Does |
-|-------|------|--------|--------------|
-| Orchestrator | Coordinator | Own Locus wallet | Discovers agents from registry, verifies escrow, dispatches tasks, pays workers |
-| Researcher | Worker/Merchant | Own Locus wallet | Searches the web via Exa and Firecrawl, creates checkout sessions |
-| Validator | Worker | Shared wallet | Fact-checks research findings for accuracy via Grok or Gemini |
-| Writer | Worker/Merchant | Own Locus wallet | Synthesizes research into reports via Gemini or Grok, creates checkout sessions |
-
-Each agent has its own Locus API key, wallet address, and USDC balance. Workers create checkout sessions as merchants; the orchestrator pays after delivery. Workers pay for their own wrapped API calls. All payments are real USDC on Base.
-
-## Service Registry
-
-Agents advertise their capabilities and prices in a marketplace registry. The orchestrator queries this registry to find the cheapest capable agent for each subtask. Reputation scores break ties.
-
-```
-Web Research       $0.05/task   [research, search, scrape, data-gathering]
-Fact Checking      $0.03/task   [validation, fact-checking, quality-assurance]
-Report Synthesis   $0.05/task   [writing, synthesis, report, summarization]
+User (MetaMask on Base mainnet)
+  │
+  │  signs ERC-7710 delegation
+  │  (grants 1Shot permission to spend USDC from smart account)
+  │
+  ▼
+Gekko Dashboard (Next.js)
+  │
+  │  POST /api/goal → mission starts
+  │
+  ▼
+Orchestrator Agent (Express / Node.js)
+  ├── Research Agent  ← Venice AI (llama-3.3-70b + web search)
+  ├── Validator Agent ← Venice AI (deepseek-v3.2 reasoning)
+  └── Writer Agent    ← Venice AI (mistral-small-2603)
+  │
+  │  mission complete
+  │
+  ▼
+User clicks "Pay Agents On-Chain"
+  │
+  │  POST /api/execute (signed delegation + executions)
+  │
+  ▼
+1Shot Permissionless Relayer (Base mainnet)
+  ├── 0.01 USDC → 1Shot fee address
+  ├── 0.05 USDC → Researcher wallet
+  ├── 0.03 USDC → Validator wallet
+  └── 0.05 USDC → Writer wallet
+  │
+  ▼
+BaseScan tx link displayed in dashboard
 ```
 
-Any new agent can register a service via `POST /api/registry/register` with a price and capabilities. The orchestrator will discover and hire it if it's the cheapest option.
+---
 
-## Payment Flow
+## Tech Stack
 
-1. Orchestrator checks its Locus wallet balance
-2. Worker agent creates a Locus checkout session (merchant/seller)
-3. Orchestrator runs preflight to verify the escrow is valid (buyer)
-4. Worker performs the task (research or synthesis)
-5. Orchestrator pays the checkout session -- USDC moves on-chain to the worker
-6. Worker's Locus client polls session status until PAID is confirmed
-7. Transaction is confirmed on Base and logged in the audit trail
+| Layer | Technology |
+|-------|-----------|
+| Frontend | Next.js 15 (static export), React, Tailwind CSS |
+| Backend | Node.js, Express |
+| AI Inference | Venice AI (private, censorship-resistant) |
+| Smart Accounts | MetaMask Hybrid Smart Account (`@metamask/smart-accounts-kit`) |
+| On-chain payments | ERC-7710 delegation + 1Shot permissionless relayer |
+| Agent payments | ethers v6 direct USDC transfers |
+| Micropayments | x402 protocol (`@metamask/x402`, disabled in demo) |
+| Testnet | Base Sepolia (agent wallets) |
+| Mainnet | Base (user → agent payments) |
+| USDC (mainnet) | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |
+| USDC (sepolia) | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
 
-If checkout escrow fails, the system falls back to direct wallet payment (with retry), then email escrow. Three independent payment methods ensure no silent fund loss.
+---
 
-## Safety
+## How 1Shot + ERC-7710 Works
 
-- **Rate limiting**: 15-second cooldown between goals, max 10 per hour, per-IP tracking
-- **CORS + API key auth**: Cross-origin protection and optional API key for write endpoints
-- **Unit tests**: 45 tests covering orchestrator, validator, registry, config, and input validation (`npm test`)
-- **Security headers**: X-Content-Type-Options, X-Frame-Options, X-XSS-Protection, Referrer-Policy, Permissions-Policy
-- **Input validation**: Budget and maxPerTask must be positive finite numbers; goal length capped
-- **URL sanitization**: Markdown renderer rejects non-HTTP URLs to prevent XSS from LLM output
-- **Error sanitization**: Internal errors return generic messages to clients; details logged server-side only
-- **Dynamic task planning**: Complex multi-faceted goals automatically decomposed into parallel research queries
-- **Budget caps**: Hardcoded max $1.00 per goal, $0.25 per task
-- **Spending controls**: Locus approval thresholds and allowance caps. Payments exceeding the threshold return an approval URL for human review, surfaced directly in the dashboard
-- **Balance verification**: Orchestrator checks its wallet before starting
-- **Escrow**: Funds locked before work begins, released only on delivery
-- **Payment retry**: Failed payments retried with 2s delay before falling back to email escrow
-- **Circuit breaker**: Prevents cascading failures when the Locus API is down; only trips on 5xx errors
+1. **Connect MetaMask** — Gekko derives your counterfactual Hybrid Smart Account address (deterministic from your EOA).
+2. **Sign Delegation** — MetaMask switches to Base mainnet and asks you to sign an EIP-712 delegation granting 1Shot's relayer address permission to transfer USDC from your smart account (capped at 0.14 USDC).
+3. **Run Mission** — Agents do the research work. No on-chain activity yet.
+4. **Pay Agents On-Chain** — You click once. The server sends your signed delegation + the payment executions to 1Shot. The relayer executes all USDC transfers in a single gasless transaction on Base mainnet.
+5. **Confirm** — A BaseScan link appears when the transaction confirms.
 
-## Setup
+No ETH needed. No gas wallet. The 0.01 USDC fee covers gas for the entire batch.
+
+---
+
+## Running Locally
 
 ### Prerequisites
 
 - Node.js 18+
-- Locus agent wallets funded with USDC on Base
+- MetaMask browser extension
+- USDC on Base mainnet (in your MetaMask smart account — see below)
 
 ### Install
 
 ```bash
+cd gekko
 npm install
-npm run build
 ```
 
 ### Configure
 
-Create a `.env` file:
+Copy `.env.example` to `.env`. The file already has working agent keys and Venice API key for local development.
 
-```
-ORCHESTRATOR_LOCUS_API_KEY=your_key
-ORCHESTRATOR_WALLET_ADDRESS=0x...
-RESEARCHER_LOCUS_API_KEY=your_key
-RESEARCHER_WALLET_ADDRESS=0x...
-WRITER_LOCUS_API_KEY=your_key
-WRITER_WALLET_ADDRESS=0x...
-```
-
-### Register wallets (first time only)
+### Start
 
 ```bash
-npm run setup
-```
+# Terminal 1 — build frontend once
+npm run build
 
-### Run
-
-```bash
+# Terminal 2 — backend (agents + API, serves built frontend)
 npm start
 ```
 
-Open http://localhost:3001 in your browser.
+Open **http://localhost:3001**
 
-## API
+For frontend hot-reload during development:
+```bash
+npm run dev        # Next.js on :3000
+npm run dev:server # Express on :3001
+```
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/health` | GET | System status, agent info, service count |
-| `/api/goal` | POST | Submit a goal for autonomous execution |
-| `/api/balances` | GET | USDC balances for all agent wallets |
-| `/api/registry` | GET | All registered services in the marketplace |
-| `/api/registry/discover?q=` | GET | Search services by keyword |
-| `/api/registry/register` | POST | Register an external agent's service |
-| `/api/escrows` | GET | All escrow sessions and their status |
-| `/api/transactions` | GET | On-chain USDC transactions from all agents |
-| `/api/approvals` | GET | Payments held by Locus spending controls |
-| `/api/timeline` | GET | Full event timeline |
-| `/api/events/stream` | GET | Server-Sent Events stream (real-time) |
-| `/api/audit` | GET | Complete audit trail for all agents |
-| `/api/reasoning` | GET | Agent decision-making log with reasoning |
-| `/api/agents` | GET | Agent names, roles, and wallet addresses |
-| `/api/reputation` | GET | Agent reputation scores |
-| `/api/webhooks/checkout` | POST | Locus webhook receiver (HMAC-SHA256 verified) |
+---
 
-## Dashboard
+## Funding the Smart Account (Required for On-Chain Payments)
 
-The web dashboard shows the full agent economy in real time:
+The ERC-7710 on-chain payment flow requires USDC in your MetaMask Hybrid Smart Account on Base mainnet. This is NOT your regular MetaMask EOA address — it's a counterfactual smart contract wallet derived from your EOA.
 
-- **Agent Network** -- wallet balances and addresses with BaseScan links
-- **Goal Input** -- submit goals with budget controls
-- **Payment Flow** -- 9-step stepper tracking the full pipeline
-- **Marketplace** -- registered services with prices and capabilities
-- **Spending Controls** -- payments held by Locus approval thresholds with clickable approval URLs
-- **Live Timeline** -- real-time SSE stream of every agent action
-- **Escrow Sessions** -- checkout sessions with Locus SDK embeds showing payment confirmation
-- **On-Chain Transactions** -- every USDC transfer with BaseScan tx links
-- **Agent Reasoning** -- decision-making log with full reasoning context
-- **Report Output** -- the final synthesized report with markdown rendering and download
-- **Locus Integration** -- 12 integrated Locus features displayed with status
+**To get your smart account address:**
+1. Open http://localhost:3001
+2. Click "Connect Wallet"
+3. Your smart account address appears in the Delegation panel
 
-## Tech Stack
+**To fund it:**
+Send at least **0.14 USDC** to your smart account address on Base mainnet:
 
-- **Runtime**: Node.js + Express
-- **Payments**: Locus API (wallets, checkout escrow, wrapped APIs, spending controls, email escrow, webhooks, feedback)
-- **Checkout SDK**: @withlocus/checkout-react (embedded, popup, programmatic)
-- **Chain**: Base (Ethereum L2)
-- **Currency**: USDC
-- **Search**: Exa + Firecrawl via Locus wrapped APIs
-- **LLMs**: Gemini + Grok via Locus wrapped APIs
-- **Frontend**: Next.js / React with SSE, Framer Motion, Tailwind CSS
+| Recipient | Amount | Purpose |
+|-----------|--------|---------|
+| 1Shot fee | 0.01 USDC | Relayer fee (mandatory, first execution) |
+| Researcher | 0.05 USDC | Research task payment |
+| Validator | 0.03 USDC | Validation task payment |
+| Writer | 0.05 USDC | Writing task payment |
+
+Bridge USDC to Base mainnet: https://bridge.base.org
+
+---
+
+## Full On-Chain Flow (End to End)
+
+1. `npm start` and open http://localhost:3001
+2. **Connect Wallet** — MetaMask popup, approve connection
+3. **Sign Delegation** — MetaMask switches to Base mainnet, sign EIP-712 delegation
+4. Enter a research goal and click **Launch Mission**
+5. Watch real-time progress in the Live Feed (SSE)
+6. When mission completes, the "Pay Agents On-Chain" panel appears
+7. Click **Pay Agents On-Chain** — server submits to 1Shot
+8. Dashboard polls for confirmation every 3 seconds
+9. When confirmed: BaseScan transaction link appears
+
+---
+
+## Agent Wallets
+
+| Agent | Address | Role |
+|-------|---------|------|
+| Orchestrator | `0xF9bc59882a7d6D2Dd24ff3800F69CC459bDDCC62` | Coordinator |
+| Researcher | `0x6eB5e2011964a3D7Cf371aAbBD49545C70A7052c` | Venice web search |
+| Validator | `0x6eB5e2011964a3D7Cf371aAbBD49545C70A7052c` | Fact-checking |
+| Writer | `0x7cB1966270d9D257AD1EEE4bEb142622A9937494` | Report writing |
+
+Fund these with USDC on Base Sepolia to enable real agent-to-agent transfers. Without funds, payments simulate gracefully and the research pipeline still runs.
+
+Base Sepolia USDC faucet: https://faucet.circle.com
+
+---
+
+## API Reference
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/goal` | Submit a research goal |
+| POST | `/api/execute` | Submit signed delegation to 1Shot, returns taskId |
+| GET | `/api/task-status?id=` | Poll 1Shot for on-chain tx confirmation |
+| GET | `/api/health` | System status |
+| GET | `/api/balances` | USDC balances for all agent wallets |
+| GET | `/api/registry` | Registered services in the agent marketplace |
+| GET | `/api/escrows` | In-memory escrow sessions |
+| GET | `/api/transactions` | On-chain USDC Transfer events |
+| GET | `/api/reasoning` | Agent decision log with full reasoning context |
+| GET | `/api/agents` | Agent names, roles, wallet addresses |
+| GET | `/api/events/stream` | SSE real-time stream of all agent actions |
+
+---
+
+## Dashboard Panels
+
+- **Mission Control** — goal input, budget slider, Launch button
+- **Agent Roster** — live status of all four agents
+- **Live Feed** — real-time SSE stream of every action
+- **Report** — final synthesized output with markdown rendering
+- **Marketplace** — registered services with prices
+- **Transactions** — on-chain USDC transfers with BaseScan links
+- **Delegation** — your signed delegation details (delegator, delegate, caveats)
+- **Reasoning** — agent decision log
+
+---
+
+## Venice AI Models
+
+| Use | Model |
+|-----|-------|
+| Web research | `llama-3.3-70b` + web search enabled |
+| Fact-checking | `deepseek-v3.2` |
+| Report writing | `mistral-small-2603` |
+
+Venice AI provides private, uncensored LLM inference with no request logging or data retention.
+
+---
 
 ## License
 
