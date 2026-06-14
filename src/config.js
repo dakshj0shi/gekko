@@ -71,7 +71,8 @@ const NETWORK = {
   chainId: parseInt(process.env.CHAIN_ID || '84532'),
   rpcUrl: process.env.RPC_URL || 'https://sepolia.base.org',
   usdcAddress: process.env.USDC_ADDRESS || '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
-  delegationManagerAddress: process.env.DELEGATION_MANAGER || '0x0000000000000000000000000000000000000000',
+  // DelegationManager and other contract addresses are resolved automatically
+  // by getSmartAccountsEnvironment(chainId) from @metamask/smart-accounts-kit
 };
 
 const ONESHOT = {
@@ -85,11 +86,20 @@ const VENICE = {
   baseUrl: process.env.VENICE_BASE_URL || 'https://api.venice.ai/api/v1',
 };
 
+// MetaMask facilitator endpoint for ERC-7710 x402 settlement
+const METAMASK_FACILITATOR_URL = NETWORK.chainId === 8453
+  ? 'https://tx-sentinel-base-mainnet.dev-api.cx.metamask.io/platform/v2/x402'
+  : 'https://tx-sentinel-base-sepolia.dev-api.cx.metamask.io/platform/v2/x402';
+
 const X402 = {
   endpointBase: process.env.X402_ENDPOINT_BASE || 'http://localhost:3001',
   treasuryAddress: process.env.X402_TREASURY_ADDRESS || process.env.ORCHESTRATOR_ADDRESS,
-  chatPrice: '0.001',
-  searchPrice: '0.0005',
+  // Prices in dollar format as required by @x402/express
+  chatPrice: '$0.001',
+  searchPrice: '$0.0005',
+  facilitatorUrl: process.env.X402_FACILITATOR_URL || METAMASK_FACILITATOR_URL,
+  // Set X402_ENABLED=true to require real on-chain payments; false = pass-through for demo
+  enabled: process.env.X402_ENABLED === 'true',
 };
 
 module.exports = { AGENTS, RATE_LIMITS, BUDGET, SYSTEM, NETWORK, ONESHOT, VENICE, X402 };

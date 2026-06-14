@@ -1,6 +1,8 @@
 require('dotenv').config();
 const express = require('express');
+const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 const { AGENTS, RATE_LIMITS, BUDGET, SYSTEM, NETWORK, ONESHOT, VENICE, X402 } = require('./config');
 const dispatchEvents = require('./event-bus');
 const ServiceRegistry = require('./registry');
@@ -10,11 +12,22 @@ const ResearchAgent = require('./agents/research-agent');
 const WriterAgent = require('./agents/writer-agent');
 const ValidatorAgent = require('./agents/validator-agent');
 const AgentWallet = require('./wallet');
-const OneShotClient = require('./oneshot');
 const { VeniceClient } = require('./venice');
-const { x402Middleware } = require('./x402-server');
+const { createX402Middleware } = require('./x402-server');
+const { createX402FetchForAgent } = require('./x402-client');
 const { getDelegationChain } = require('./delegation');
-const { buildPermissionRequest, parseGrantedPermissions } = require('./permissions');
+const { buildPermissionRequestParams, parseGrantedPermissions } = require('./permissions');
+const {
+  send7710Transaction,
+  getTaskStatus,
+  waitForTask,
+  encodeERC20Transfer,
+  buildAgentPaymentExecutions,
+  USDC_BASE,
+  ONESHOT_FEE_ADDRESS,
+  ONESHOT_FEE_USDC,
+  BASE_EXPLORER,
+} = require('./oneshot');
 
 const REASONING_ACTIONS = new Set([
   'subtasks_planned', 'agent_discovered', 'dispatching_task',
@@ -28,28 +41,26 @@ const REASONING_ACTIONS = new Set([
 const app = express();
 app.use(express.json({ limit: '100kb' }));
 
+// CORS — expose x402 payment headers for browser clients
+app.use(cors({
+  origin: (origin, cb) => {
+    const allowed = [
+      `http://localhost:${SYSTEM.port}`,
+      'http://localhost:3000',
+      SYSTEM.deployedUrl,
+    ].filter(Boolean);
+    if (!origin || allowed.includes(origin)) return cb(null, true);
+    cb(null, false);
+  },
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'X-API-Key', 'PAYMENT-SIGNATURE'],
+  exposedHeaders: ['PAYMENT-REQUIRED', 'PAYMENT-RESPONSE'],
+}));
+
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
-  res.setHeader('X-XSS-Protection', '1; mode=block');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
-  next();
-});
-
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  const allowed = [
-    `http://localhost:${SYSTEM.port}`,
-    `http://localhost:3000`,
-    SYSTEM.deployedUrl,
-  ].filter(Boolean);
-  if (!origin || allowed.includes(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin || '*');
-  }
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-API-Key, X-Payment');
-  if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
 
@@ -69,7 +80,6 @@ app.use((req, res, next) => {
   next();
 });
 
-const fs = require('fs');
 const outDir = path.join(__dirname, '..', 'out');
 const publicDir = path.join(__dirname, '..', 'public');
 app.use(express.static(fs.existsSync(outDir) ? outDir : publicDir));
@@ -88,18 +98,12 @@ dispatchEvents.on('agent-event', (event) => {
   for (const client of sseClients) client.write(`data: ${data}\n\n`);
 });
 
-// ── Agent Initialization ─────────────────────────────────────────
+// ── Agent Initialization (async — requires x402 smart account setup) ─────
 
 let orchestrator, researcher, writer, validator;
-let oneShotClient, veniceClient;
+let veniceClient;
 
-function makeWallet(privateKey) {
-  if (!privateKey) return null;
-  return new AgentWallet(privateKey, oneShotClient, NETWORK);
-}
-
-function initAgents() {
-  oneShotClient = new OneShotClient(ONESHOT.apiKey);
+async function initAgents() {
   veniceClient = new VeniceClient(VENICE.apiKey);
 
   const rConf = AGENTS.researcher;
@@ -107,24 +111,41 @@ function initAgents() {
   const vConf = AGENTS.validator;
   const oConf = AGENTS.orchestrator;
 
+  // Create x402 payment-aware fetch per agent (wraps ERC-7710 delegation flow)
+  const [orchFetch, resFetch, wriFetch] = await Promise.all([
+    createX402FetchForAgent(oConf.privateKey),
+    createX402FetchForAgent(rConf.privateKey),
+    createX402FetchForAgent(wConf.privateKey),
+  ]);
+
+  const makeWallet = (privateKey) => {
+    if (!privateKey) return null;
+    return new AgentWallet(privateKey, null, NETWORK);
+  };
+
   researcher = new ResearchAgent({
     name: rConf.name,
     agentWallet: makeWallet(rConf.privateKey),
+    fetchWithPayment: resFetch,
   });
 
   writer = new WriterAgent({
     name: wConf.name,
     agentWallet: makeWallet(wConf.privateKey),
+    fetchWithPayment: wriFetch,
   });
 
+  // Validator shares researcher keypair — reuse the same fetch instance
   validator = new ValidatorAgent({
     name: vConf.name,
     agentWallet: makeWallet(vConf.privateKey),
+    fetchWithPayment: resFetch,
   });
 
   orchestrator = new OrchestratorAgent({
     name: oConf.name,
     agentWallet: makeWallet(oConf.privateKey),
+    fetchWithPayment: orchFetch,
     registry,
     escrowManager,
   });
@@ -143,55 +164,17 @@ function initAgents() {
   console.log(`  Researcher:   ${rConf.address}`);
   console.log(`  Writer:       ${wConf.address}`);
   console.log(`  Network:      ${NETWORK.name} (chainId ${NETWORK.chainId})`);
+  console.log(`  x402 mode:    ${X402.enabled ? 'ENABLED (ERC-7710 delegation payments)' : 'demo (pass-through)'}`);
 }
 
 function allAgents() {
   return [
     { name: 'orchestrator', agent: orchestrator },
-    { name: 'researcher', agent: researcher },
-    { name: 'writer', agent: writer },
-    { name: 'validator', agent: validator },
+    { name: 'researcher',   agent: researcher },
+    { name: 'writer',       agent: writer },
+    { name: 'validator',    agent: validator },
   ];
 }
-
-// ── x402-gated Venice AI proxy routes ───────────────────────────
-
-const x402Options = {
-  recipient: X402.treasuryAddress || '0x0000000000000000000000000000000000000000',
-  tokenAddress: NETWORK.usdcAddress,
-  chainId: String(NETWORK.chainId),
-};
-
-app.post('/api/venice/chat',
-  x402Middleware({ ...x402Options, amount: X402.chatPrice }),
-  async (req, res) => {
-    try {
-      if (!veniceClient) return res.status(503).json({ error: 'Venice AI not configured' });
-      const { model, messages, ...opts } = req.body;
-      const result = await veniceClient.chat(model, messages, opts);
-      res.json(result);
-    } catch (err) {
-      console.error('Venice chat error:', err.message);
-      res.status(502).json({ error: 'Venice AI request failed' });
-    }
-  }
-);
-
-app.post('/api/venice/search',
-  x402Middleware({ ...x402Options, amount: X402.searchPrice }),
-  async (req, res) => {
-    try {
-      if (!veniceClient) return res.status(503).json({ error: 'Venice AI not configured' });
-      const query = req.body.q || req.body.query || '';
-      const { model, venice_parameters } = req.body;
-      const result = await veniceClient.search(query, { model, venice_parameters });
-      res.json(result);
-    } catch (err) {
-      console.error('Venice search error:', err.message);
-      res.status(502).json({ error: 'Venice AI search failed' });
-    }
-  }
-);
 
 // ── API Routes ───────────────────────────────────────────────────
 
@@ -200,13 +183,14 @@ app.get('/api/health', (req, res) => {
     status: 'ok',
     agents: {
       orchestrator: { name: orchestrator?.name, wallet: orchestrator?.walletAddress },
-      researcher: { name: researcher?.name, wallet: researcher?.walletAddress },
-      writer: { name: writer?.name, wallet: writer?.walletAddress },
-      validator: { name: validator?.name, wallet: validator?.walletAddress },
+      researcher:   { name: researcher?.name,   wallet: researcher?.walletAddress },
+      writer:       { name: writer?.name,       wallet: writer?.walletAddress },
+      validator:    { name: validator?.name,    wallet: validator?.walletAddress },
     },
     services: registry.getAll().length,
-    escrows: escrowManager.getAll().length,
-    network: NETWORK.name,
+    escrows:  escrowManager.getAll().length,
+    network:  NETWORK.name,
+    x402:     X402.enabled ? 'enabled' : 'demo',
   });
 });
 
@@ -230,8 +214,6 @@ app.post('/api/goal', async (req, res) => {
   if (goal.length > SYSTEM.maxGoalLength) return res.status(400).json({ error: `goal must be under ${SYSTEM.maxGoalLength} characters` });
   if (budget !== undefined && (!Number.isFinite(Number(budget)) || Number(budget) <= 0))
     return res.status(400).json({ error: 'budget must be a positive number' });
-  if (maxPerTask !== undefined && (!Number.isFinite(Number(maxPerTask)) || Number(maxPerTask) <= 0))
-    return res.status(400).json({ error: 'maxPerTask must be a positive number' });
 
   const now = Date.now();
   if (now - lastGoalTime < RATE_LIMITS.goalCooldownMs) {
@@ -240,27 +222,25 @@ app.post('/api/goal', async (req, res) => {
   }
 
   while (goalHourWindow.length && goalHourWindow[0] < now - RATE_LIMITS.oneHourMs) goalHourWindow.shift();
-  if (goalHourWindow.length >= RATE_LIMITS.maxGoalsPerHour) {
+  if (goalHourWindow.length >= RATE_LIMITS.maxGoalsPerHour)
     return res.status(429).json({ error: `Rate limited. Max ${RATE_LIMITS.maxGoalsPerHour} goals per hour.` });
-  }
 
   const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
   const ipTimes = ipGoalCounts.get(clientIp) || [];
   const recentIpGoals = ipTimes.filter(t => t > now - RATE_LIMITS.oneHourMs);
-  if (recentIpGoals.length >= RATE_LIMITS.maxGoalsPerHour) {
+  if (recentIpGoals.length >= RATE_LIMITS.maxGoalsPerHour)
     return res.status(429).json({ error: `Rate limited. Max ${RATE_LIMITS.maxGoalsPerHour} goals per hour per client.` });
-  }
   recentIpGoals.push(now);
   ipGoalCounts.set(clientIp, recentIpGoals);
 
   lastGoalTime = now;
   goalHourWindow.push(now);
 
-  const safeBudget = Math.min(budget || orchestrator.budget.total, BUDGET.maxPerGoal);
+  const safeBudget  = Math.min(budget   || orchestrator.budget.total,   BUDGET.maxPerGoal);
   const safePerTask = Math.min(maxPerTask || orchestrator.budget.perTask, BUDGET.maxPerTask);
   if (budget || maxPerTask) orchestrator.setBudget(safeBudget, safePerTask);
 
-  // Apply ERC-7715 permissions from frontend if provided
+  // Apply ERC-7715 permission context from frontend grant
   if (permissionContext) {
     const parsed = parseGrantedPermissions(permissionContext);
     orchestrator.setPermissions(parsed);
@@ -282,120 +262,74 @@ app.get('/api/balances', async (req, res) => {
       if (!agent?.agentWallet) { balances[name] = { usdc_balance: '0', error: 'No wallet configured' }; return; }
       const bal = await agent.getBalance();
       balances[name] = { usdc_balance: String(bal) };
-    } catch (err) {
-      balances[name] = { error: 'Balance check failed' };
-    }
+    } catch { balances[name] = { error: 'Balance check failed' }; }
   }));
   res.json({ balances });
 });
 
-app.get('/api/registry', (req, res) => {
-  res.json({ services: registry.getAll() });
-});
+app.get('/api/registry', (req, res) => res.json({ services: registry.getAll() }));
 
 app.get('/api/registry/discover', (req, res) => {
   const { q } = req.query;
   if (!q) return res.status(400).json({ error: 'q parameter required' });
-  if (typeof q !== 'string' || q.length > 200) return res.status(400).json({ error: 'query must be a string under 200 characters' });
+  if (typeof q !== 'string' || q.length > 200) return res.status(400).json({ error: 'query too long' });
   res.json({ results: registry.discover(q) });
 });
 
 app.post('/api/registry/register', (req, res) => {
   const { agentName, walletAddress, service } = req.body;
   if (!agentName || typeof agentName !== 'string' || agentName.length > 100)
-    return res.status(400).json({ error: 'agentName is required (string, max 100 chars)' });
+    return res.status(400).json({ error: 'agentName required (string, max 100)' });
   if (!walletAddress || !/^0x[a-fA-F0-9]{40}$/.test(walletAddress))
     return res.status(400).json({ error: 'walletAddress must be a valid Ethereum address' });
   if (!service?.name || !service?.price || !Array.isArray(service?.capabilities))
-    return res.status(400).json({ error: 'service must include name, price, and capabilities array' });
-  if (typeof service.price !== 'number' || service.price <= 0 || service.price > 10)
-    return res.status(400).json({ error: 'service.price must be between 0 and 10 USDC' });
-
+    return res.status(400).json({ error: 'service must include name, price, and capabilities' });
   const entry = registry.register(agentName, walletAddress, '', {
     name: String(service.name).slice(0, 100),
     description: String(service.description || '').slice(0, 500),
     price: service.price,
     capabilities: service.capabilities.slice(0, 10).map(c => String(c).slice(0, 50)),
   });
-  res.json({ success: true, serviceId: entry.id, message: 'Service registered.' });
+  res.json({ success: true, serviceId: entry.id });
 });
 
-app.get('/api/escrows', (req, res) => {
-  res.json({ escrows: [...escrowManager.getAll()].reverse() });
-});
+app.get('/api/escrows', (req, res) => res.json({ escrows: [...escrowManager.getAll()].reverse() }));
 
-app.get('/api/timeline', (req, res) => {
-  res.json({ events: masterTimeline });
-});
+app.get('/api/timeline', (req, res) => res.json({ events: masterTimeline }));
 
 app.get('/api/events/stream', (req, res) => {
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
-  });
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
   res.write(`data: ${JSON.stringify({ action: 'connected', timestamp: new Date().toISOString() })}\n\n`);
   sseClients.add(res);
   req.on('close', () => sseClients.delete(res));
 });
 
-// 1Shot webhook — confirms on-chain tx settlement
-app.post('/api/webhooks/oneshot', express.text({ type: '*/*' }), (req, res) => {
-  const webhookSecret = ONESHOT.webhookSecret;
-  const signature = req.headers['x-signature-256'] || req.headers['x-1shot-signature'];
-
-  if (webhookSecret && oneShotClient) {
-    const payload = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
-    if (!oneShotClient.verifyWebhookSignature(payload, signature, webhookSecret)) {
-      return res.status(401).json({ error: 'Invalid webhook signature' });
-    }
-  }
-
-  const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-  const { txId, status, txHash } = body;
-
-  if (status === 'confirmed' && txId) {
-    escrowManager.confirmByTxId(txId, txHash);
-    dispatchEvents.emit('agent-event', {
-      timestamp: new Date().toISOString(),
-      agent: '1shot',
-      action: 'payment_confirmed',
-      type: 'payment',
-      txId,
-      txHash,
-    });
-  }
-
-  res.json({ received: true });
-});
-
-// ERC-7715 permission request descriptor for the frontend
+// ERC-7715 permission request parameters for the frontend
 app.get('/api/permissions/request', (req, res) => {
-  const request = buildPermissionRequest(
+  const params = buildPermissionRequestParams(
     AGENTS.orchestrator.address,
     NETWORK.usdcAddress,
     BUDGET.maxPerGoal,
     NETWORK.chainId
   );
-  res.json({ permissionRequest: request });
+  res.json({ permissionParams: params });
 });
 
 // ERC-7710 delegation chain for the UI
 app.get('/api/delegations', (req, res) => {
-  const chain = getDelegationChain();
-  res.json({ delegations: chain });
+  res.json({ delegations: getDelegationChain() });
 });
 
 app.get('/api/audit', (req, res) => {
-  const workerAudits = {};
-  if (researcher) workerAudits.researcher = researcher.getAuditTrail();
-  if (writer) workerAudits.writer = writer.getAuditTrail();
-  if (validator) workerAudits.validator = validator.getAuditTrail();
   res.json({
     orchestrator: orchestrator?.getAuditTrail(),
-    workers: workerAudits,
+    workers: {
+      researcher: researcher?.getAuditTrail(),
+      writer:     writer?.getAuditTrail(),
+      validator:  validator?.getAuditTrail(),
+    },
     budget: orchestrator?.budget,
-    tasks: orchestrator?.tasks,
+    tasks:  orchestrator?.tasks,
   });
 });
 
@@ -407,19 +341,16 @@ app.get('/api/reasoning', (req, res) => {
 app.get('/api/agents', (req, res) => {
   res.json({
     agents: allAgents().map(({ agent }) => ({
-      name: agent?.name,
-      role: agent?.role,
-      wallet: agent?.walletAddress,
+      name:       agent?.name,
+      role:       agent?.role,
+      wallet:     agent?.walletAddress,
       reputation: registry.getReputation(agent?.name),
     })),
   });
 });
 
-app.get('/api/reputation', (req, res) => {
-  res.json({ reputations: registry.getAllReputations() });
-});
+app.get('/api/reputation', (req, res) => res.json({ reputations: registry.getAllReputations() }));
 
-// On-chain transactions — query USDC Transfer events via ethers
 app.get('/api/transactions', async (req, res) => {
   try {
     const { ethers } = require('ethers');
@@ -428,26 +359,16 @@ app.get('/api/transactions', async (req, res) => {
     const usdc = new ethers.Contract(NETWORK.usdcAddress, ERC20_ABI, provider);
     const all = [];
     const seen = new Set();
-
     const agentList = allAgents().filter(a => a.agent?.walletAddress);
-
-    // Look back ~2000 blocks (~67 min on Base)
     let fromBlock;
-    try {
-      const latest = await provider.getBlockNumber();
-      fromBlock = Math.max(0, latest - 2000);
-    } catch { fromBlock = 0; }
-
+    try { const latest = await provider.getBlockNumber(); fromBlock = Math.max(0, latest - 2000); }
+    catch { fromBlock = 0; }
     await Promise.all(agentList.map(async ({ name, agent }) => {
-      if (!agent?.walletAddress) return;
       const addr = agent.walletAddress;
       if (seen.has(addr)) return;
       seen.add(addr);
-
       try {
-        // Outgoing transfers from this agent
-        const outFilter = usdc.filters.Transfer(addr, null);
-        const outEvents = await usdc.queryFilter(outFilter, fromBlock);
+        const outEvents = await usdc.queryFilter(usdc.filters.Transfer(addr, null), fromBlock);
         outEvents.forEach(e => all.push({
           _agent: name,
           from_address: addr,
@@ -458,9 +379,8 @@ app.get('/api/transactions', async (req, res) => {
           created_at: new Date().toISOString(),
           memo: '',
         }));
-      } catch { /* RPC may not support event queries on all networks */ }
+      } catch { /* RPC may not support event queries */ }
     }));
-
     all.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
     res.json({ transactions: all });
   } catch (err) {
@@ -469,15 +389,98 @@ app.get('/api/transactions', async (req, res) => {
   }
 });
 
+// Venice AI proxy routes — x402 middleware applied globally via paymentMiddleware
+// (configured in createX402Middleware for POST /api/venice/chat and /search)
+app.post('/api/venice/chat', async (req, res) => {
+  try {
+    if (!veniceClient) return res.status(503).json({ error: 'Venice AI not configured' });
+    const { model, messages, ...opts } = req.body;
+    const result = await veniceClient.chat(model, messages, opts);
+    res.json(result);
+  } catch (err) {
+    console.error('Venice chat error:', err.message);
+    res.status(502).json({ error: 'Venice AI request failed' });
+  }
+});
+
+app.post('/api/venice/search', async (req, res) => {
+  try {
+    if (!veniceClient) return res.status(503).json({ error: 'Venice AI not configured' });
+    const query = req.body.q || req.body.query || '';
+    const { model, venice_parameters } = req.body;
+    const result = await veniceClient.search(query, { model, venice_parameters });
+    res.json(result);
+  } catch (err) {
+    console.error('Venice search error:', err.message);
+    res.status(502).json({ error: 'Venice AI search failed' });
+  }
+});
+
+// ── 1Shot ERC-7710 on-chain execution ────────────────────────────
+
+/**
+ * POST /api/execute
+ * Submits a signed ERC-7710 delegation + agent payment executions to 1Shot.
+ * Body: { signedDelegation, recipients?, goalId? }
+ * signedDelegation comes from signDelegationForOneShot() in the browser.
+ */
+app.post('/api/execute', async (req, res) => {
+  try {
+    const { signedDelegation, recipients, goalId } = req.body;
+
+    if (!signedDelegation) {
+      return res.status(400).json({ error: 'signedDelegation required' });
+    }
+
+    // Default recipients: Researcher + Validator + Writer on Base mainnet
+    // (same wallet addresses as Base Sepolia — derived from same private keys)
+    const payTo = recipients?.length ? recipients : [
+      { address: AGENTS.researcher.address, amountUsdc: 0.05 },
+      { address: AGENTS.validator.address,  amountUsdc: 0.03 },
+      { address: AGENTS.writer.address,     amountUsdc: 0.05 },
+    ];
+
+    const executions = buildAgentPaymentExecutions(payTo);
+    // Submit to 1Shot and return taskId immediately — frontend polls /api/task-status
+    const taskId = await send7710Transaction(signedDelegation, executions);
+
+    res.json({
+      goalId,
+      taskId,
+      txHash: null,      // not yet confirmed — frontend polls task-status
+      confirmed: false,
+      pending: true,
+      explorer: BASE_EXPLORER,
+    });
+  } catch (err) {
+    console.error('[execute] ERROR:', err.message);
+    res.status(500).json({ error: err.message || 'Execution failed' });
+  }
+});
+
+/**
+ * GET /api/task-status?id=<taskId>
+ * Poll 1Shot relayer for on-chain transaction status.
+ */
+app.get('/api/task-status', async (req, res) => {
+  const { id } = req.query;
+  if (!id || typeof id !== 'string' || id.length > 200) {
+    return res.status(400).json({ error: 'id parameter required' });
+  }
+  try {
+    const status = await getTaskStatus(id);
+    res.json(status);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // SPA fallback
 app.get('*', (req, res) => {
   const staticRoot = fs.existsSync(outDir) ? outDir : publicDir;
   const indexPath = path.join(staticRoot, 'index.html');
-  if (fs.existsSync(indexPath)) {
-    res.sendFile(indexPath);
-  } else {
-    res.status(404).send('Frontend not built. Run: npm run build');
-  }
+  if (fs.existsSync(indexPath)) res.sendFile(indexPath);
+  else res.status(404).send('Frontend not built. Run: npm run build');
 });
 
 app.use((err, _req, res, _next) => {
@@ -485,13 +488,31 @@ app.use((err, _req, res, _next) => {
   if (!res.headersSent) res.status(500).json({ error: 'An internal error occurred.' });
 });
 
-try {
-  initAgents();
-} catch (err) {
-  console.warn('Agent init warning:', err.message);
+// ── Async startup ────────────────────────────────────────────────
+
+async function startServer() {
+  // 1. Build x402 payment middleware (async because @x402/express is ESM)
+  //    paymentMiddleware intercepts POST /api/venice/* before the handlers above
+  const x402Mw = await createX402Middleware();
+  // Register BEFORE the Venice route handlers so it intercepts first
+  app.use(x402Mw);
+
+  // 2. Initialize agents (async because smart account wrapping is async)
+  try {
+    await initAgents();
+  } catch (err) {
+    console.warn('Agent init warning:', err.message);
+  }
+
+  // 3. Start listening
+  app.listen(SYSTEM.port, () => {
+    console.log(`\nGekko running on http://localhost:${SYSTEM.port}`);
+    console.log(`Network: ${NETWORK.name} (chain ${NETWORK.chainId})`);
+    console.log(`x402:    ${X402.enabled ? 'enabled — ERC-7710 delegation payments active' : 'demo mode — set X402_ENABLED=true to enable payments'}\n`);
+  });
 }
 
-app.listen(SYSTEM.port, () => {
-  console.log(`Gekko running on http://localhost:${SYSTEM.port}`);
-  console.log(`Network: ${NETWORK.name} (chain ${NETWORK.chainId})`);
+startServer().catch(err => {
+  console.error('Server startup failed:', err);
+  process.exit(1);
 });

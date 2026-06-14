@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
+import type { DelegationRecord } from "./lib/smartAccount";
 
 /* ── Helpers ── */
 function esc(str: any): string {
@@ -60,16 +61,6 @@ function agentBadgeStyle(name: string): React.CSSProperties {
   return { backgroundColor: color + "18", color, border: `1px solid ${color}30` };
 }
 
-function agentTextClass(name: string): string {
-  if (!name) return "text-white/40";
-  const n = name.toLowerCase();
-  if (n.includes("orch")) return "text-[#4a7a49]";
-  if (n.includes("res")) return "text-[#3d7a5a]";
-  if (n.includes("val")) return "text-[#52735a]";
-  if (n.includes("wri")) return "text-[#6b8a5a]";
-  return "text-white/40";
-}
-
 function fmtUsdc(v: any): string {
   const n = parseFloat(v?.usdc_balance ?? v ?? "0");
   if (isNaN(n)) return "—";
@@ -91,6 +82,13 @@ interface Transaction { _agent: string; to_address?: string; from_address?: stri
 interface ReasonEntry { agent: string; action: string; reasoning?: string; goal?: string; task?: string; description?: string; amount?: number; }
 interface Delegation { from: string; to: string; role: string; type: string; authority: string; caveats: any[]; signed: boolean; }
 
+interface OnChainPayment {
+  state: "idle" | "executing" | "polling" | "confirmed" | "failed";
+  taskId?: string;
+  txHash?: string;
+  error?: string;
+}
+
 const HIDDEN_ACTIONS = new Set(["escrow_failed","escrow_fallback","escrow_creating","synthesis_provider_failed","payment_pending_approval"]);
 
 const STEP_LABELS = [
@@ -102,9 +100,9 @@ const STEP_LABELS = [
   "Release payment — 1Shot USDC relay",
   "Validator fact-checks via Venice reasoning",
   "Writer synthesizes report via Venice AI",
-  "Final payment settled on-chain",
+  "Final payment settled on Base mainnet",
 ];
-const STEP_BADGES = ["smart account","marketplace","ERC-7710","ERC-7715","x402","1Shot","Venice reasoning","Venice AI","Base L2"];
+const STEP_BADGES = ["smart account","marketplace","ERC-7710","ERC-7715","x402 ERC-7710","USDC transfer","Venice reasoning","Venice AI","Base L2"];
 
 /* ── Main Page ── */
 export default function Page() {
@@ -144,10 +142,14 @@ function Home() {
   const [statusLine, setStatusLine] = useState("");
   const [hasRun, setHasRun] = useState(false);
 
-  /* MetaMask / ERC-7715 */
+  /* MetaMask + ERC-7710 delegation */
   const [userAddress, setUserAddress] = useState<string | null>(null);
-  const [permissionGranted, setPermissionGranted] = useState(false);
-  const [permissionContext, setPermissionContext] = useState<any>(null);
+  const [signingDelegation, setSigningDelegation] = useState(false);
+  const [signedDelegation, setSignedDelegation] = useState<DelegationRecord | null>(null);
+  const [smartAccountAddress, setSmartAccountAddress] = useState<string | null>(null);
+
+  /* 1Shot on-chain payment */
+  const [onChainPayment, setOnChainPayment] = useState<OnChainPayment>({ state: "idle" });
 
   const tlRef = useRef<HTMLDivElement>(null);
 
@@ -222,6 +224,26 @@ function Home() {
     return () => { clearInterval(b); clearInterval(t); };
   }, []);
 
+  /* Poll 1Shot task status */
+  useEffect(() => {
+    if (onChainPayment.state !== "polling" || !onChainPayment.taskId) return;
+    const iv = setInterval(async () => {
+      try {
+        const r = await fetch(`/api/task-status?id=${onChainPayment.taskId}`);
+        const d = await r.json();
+        if (d.txHash) {
+          setOnChainPayment(p => ({ ...p, state: "confirmed", txHash: d.txHash }));
+          setSteps(prev => { const s = [...prev]; s[8] = "done"; return s; });
+          clearInterval(iv);
+        } else if (["failed","rejected","reverted"].includes(d.status)) {
+          setOnChainPayment(p => ({ ...p, state: "failed", error: `1Shot status: ${d.status}` }));
+          clearInterval(iv);
+        }
+      } catch {}
+    }, 3000);
+    return () => clearInterval(iv);
+  }, [onChainPayment.state, onChainPayment.taskId]);
+
   /* Stepper */
   function updateStepper(ev: AgentEvent) {
     const a = ev.action;
@@ -242,36 +264,48 @@ function Home() {
     });
   }
 
-  /* MetaMask */
+  /* ── MetaMask ── */
   async function connectWallet() {
     const eth = (window as any).ethereum;
-    if (!eth) { alert("MetaMask not found. Please install it."); return; }
+    if (!eth) { alert("MetaMask not found. Please install MetaMask."); return; }
     try {
       const accounts = await eth.request({ method: "eth_requestAccounts" });
       setUserAddress(accounts[0]);
     } catch (err: any) { console.error("Connect failed:", err); }
   }
 
-  async function grantPermissions() {
+  /**
+   * Sign an ERC-7710 delegation from the user's MetaMask Smart Account to 1Shot.
+   * MetaMask switches to Base mainnet, derives the smart account, and shows
+   * an EIP-712 signing popup. The signed delegation is stored and passed to
+   * every goal POST and to /api/execute for on-chain payment.
+   */
+  async function signDelegation() {
     const eth = (window as any).ethereum;
-    if (!eth) return;
+    if (!eth || !userAddress) { alert("Connect your wallet first."); return; }
+    setSigningDelegation(true);
     try {
-      const r = await fetch("/api/permissions/request");
-      const { permissionRequest } = await r.json();
-      const result = await eth.request({
-        method: "wallet_grantPermissions",
-        params: [permissionRequest],
-      });
-      setPermissionContext(result);
-      setPermissionGranted(true);
+      const { signDelegationForOneShot, getSmartAccountAddress, ONESHOT_CHAIN_ID } = await import("./lib/smartAccount");
+
+      // Derive smart account address for display (no signing yet)
+      try {
+        const sa = await getSmartAccountAddress(userAddress);
+        setSmartAccountAddress(sa);
+      } catch {}
+
+      // Budget in micro-USDC (6 decimals): budget USDC + 0.01 fee
+      const budgetMicro = BigInt(Math.floor(budget * 1_000_000));
+      const delegation = await signDelegationForOneShot(eth, userAddress, budgetMicro);
+      setSignedDelegation(delegation);
     } catch (err: any) {
-      console.warn("wallet_grantPermissions:", err.message);
-      setPermissionGranted(true);
-      setPermissionContext({ permissions: [], note: "Simulated for demo" });
+      console.error("Delegation signing failed:", err);
+      alert(`Delegation signing failed: ${err?.message ?? err}`);
+    } finally {
+      setSigningDelegation(false);
     }
   }
 
-  /* Run goal */
+  /* ── Goal execution ── */
   async function runGoal() {
     if (!goal.trim() || running) return;
     setRunning(true);
@@ -281,18 +315,24 @@ function Home() {
     setStatusLine("Launching mission...");
     setHasRun(true);
     setActiveTab("report");
+    setOnChainPayment({ state: "idle" });
 
     try {
       const res = await fetch("/api/goal", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ goal, budget, maxPerTask, permissionContext }),
+        body: JSON.stringify({ goal, budget, maxPerTask, signedDelegation }),
       });
       const data = await res.json();
       if (data.report) {
         const reportText = data.report?.report || data.report;
         setReport(typeof reportText === "string" ? reportText : JSON.stringify(reportText));
-        setReportHistory(prev => [{ goal, report: typeof reportText === "string" ? reportText : JSON.stringify(reportText), timestamp: new Date().toISOString(), spent: data.audit?.summary?.totalSpent || 0 }, ...prev.slice(0, 9)]);
+        setReportHistory(prev => [{
+          goal,
+          report: typeof reportText === "string" ? reportText : JSON.stringify(reportText),
+          timestamp: new Date().toISOString(),
+          spent: data.audit?.summary?.totalSpent || 0,
+        }, ...prev.slice(0, 9)]);
       }
       await loadEscrows(); await loadTransactions(); await loadBalances(); await loadReasoning(); await loadDelegations();
     } catch {}
@@ -300,6 +340,30 @@ function Home() {
     setRunning(false);
     setCooldown(15);
     const cd = setInterval(() => setCooldown(p => { if (p <= 1) { clearInterval(cd); return 0; } return p - 1; }), 1000);
+  }
+
+  /* ── 1Shot on-chain payment ── */
+  async function executeOnChain() {
+    if (!signedDelegation) { alert("Sign a delegation first."); return; }
+    setOnChainPayment({ state: "executing" });
+    try {
+      const res = await fetch("/api/execute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ signedDelegation }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Execute failed");
+      if (data.txHash && data.confirmed) {
+        setOnChainPayment({ state: "confirmed", taskId: data.taskId, txHash: data.txHash });
+        setSteps(prev => { const s = [...prev]; s[8] = "done"; return s; });
+      } else {
+        // Start polling
+        setOnChainPayment({ state: "polling", taskId: data.taskId });
+      }
+    } catch (err: any) {
+      setOnChainPayment({ state: "failed", error: err?.message ?? "Unknown error" });
+    }
   }
 
   /* ── Render ── */
@@ -311,6 +375,8 @@ function Home() {
   ];
 
   const TABS = ["report","marketplace","escrow","transactions","delegation","reasoning"];
+
+  const delegationSigned = !!signedDelegation;
 
   return (
     <div className="min-h-screen bg-black text-white/80 flex flex-col font-mono text-sm">
@@ -325,20 +391,23 @@ function Home() {
           <span className="text-white/40 text-xs">Autonomous AI · Smart Accounts · On-Chain</span>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-[10px] px-2 py-0.5 rounded border border-[#4a7a49]/40 text-[#4a7a49]/80 bg-[#4a7a49]/5">Base Sepolia</span>
-          <span className="text-[10px] px-2 py-0.5 rounded border border-white/8 text-white/30">ERC-7710 · x402 · Venice AI · 1Shot</span>
+          <span className="text-[10px] px-2 py-0.5 rounded border border-[#4a7a49]/40 text-[#4a7a49]/80 bg-[#4a7a49]/5">Base</span>
+          <span className="text-[10px] px-2 py-0.5 rounded border border-white/8 text-white/30">ERC-7710 · 1Shot · x402 · Venice AI</span>
+
           {!userAddress ? (
-            <button onClick={connectWallet} className="text-xs px-3 py-1 rounded bg-[#4a7a49]/20 border border-[#4a7a49]/30 text-[#4a7a49] hover:bg-[#4a7a49]/30 transition-colors">
+            <button onClick={connectWallet}
+              className="text-xs px-3 py-1 rounded bg-[#4a7a49]/20 border border-[#4a7a49]/30 text-[#4a7a49] hover:bg-[#4a7a49]/30 transition-colors">
               Connect Wallet
             </button>
-          ) : !permissionGranted ? (
-            <button onClick={grantPermissions} className="text-xs px-3 py-1 rounded bg-[#3d7a5a]/20 border border-[#3d7a5a]/30 text-[#3d7a5a] hover:bg-[#3d7a5a]/30 transition-colors animate-pulse">
-              Grant Permissions
+          ) : !delegationSigned ? (
+            <button onClick={signDelegation} disabled={signingDelegation}
+              className="text-xs px-3 py-1 rounded bg-[#3d7a5a]/20 border border-[#3d7a5a]/30 text-[#3d7a5a] hover:bg-[#3d7a5a]/30 transition-colors animate-pulse disabled:opacity-50 disabled:animate-none">
+              {signingDelegation ? "Signing…" : "Sign Delegation"}
             </button>
           ) : (
             <div className="flex items-center gap-2 text-xs">
               <span className="w-2 h-2 rounded-full bg-[#4a7a49] shadow-[0_0_6px_#4a7a49]" />
-              <span className="text-[#4a7a49]">Permissions Active</span>
+              <span className="text-[#4a7a49]">Delegation Active</span>
               <span className="text-white/30">{userAddress.slice(0, 6)}…{userAddress.slice(-4)}</span>
             </div>
           )}
@@ -376,7 +445,7 @@ function Home() {
           <div className="border-t border-white/5 px-3 pt-2 pb-3 mt-1">
             <p className="text-[10px] uppercase tracking-widest text-white/20 mb-2">ERC-7710 Chain</p>
             {delegations.length === 0 ? (
-              <p className="text-[10px] text-white/20 italic">run setup.js to build</p>
+              <p className="text-[10px] text-white/20 italic">Connect & sign to build</p>
             ) : (
               <div className="space-y-1">
                 {delegations.map((d, i) => (
@@ -389,6 +458,16 @@ function Home() {
                     {d.signed && <span className="ml-auto text-[8px] text-[#4a7a49] mt-0.5">✓</span>}
                   </div>
                 ))}
+              </div>
+            )}
+
+            {/* Signed delegation info */}
+            {signedDelegation && (
+              <div className="mt-2 pt-2 border-t border-white/5">
+                <p className="text-[9px] text-[#4a7a49] mb-0.5">✓ 1Shot delegation signed</p>
+                <p className="text-[8px] text-white/20 font-mono truncate">{signedDelegation.delegator.slice(0,10)}…</p>
+                <p className="text-[8px] text-white/15">→ 1Shot relayer</p>
+                <p className="text-[8px] text-white/15">Base mainnet</p>
               </div>
             )}
           </div>
@@ -475,6 +554,66 @@ function Home() {
               })}
             </div>
           </div>
+
+          {/* 1Shot on-chain payment panel — shown after mission completes */}
+          {hasRun && !running && (
+            <div className="rounded border border-white/8 bg-white/1 p-4">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-[10px] uppercase tracking-widest text-white/20">On-Chain Settlement · 1Shot · Base</p>
+                {onChainPayment.state === "confirmed" && (
+                  <span className="text-[9px] px-2 py-0.5 rounded bg-[#4a7a49]/20 border border-[#4a7a49]/30 text-[#4a7a49]">Confirmed</span>
+                )}
+              </div>
+
+              {onChainPayment.state === "idle" && (
+                <div className="flex items-center gap-3">
+                  <p className="text-[11px] text-white/40 flex-1">
+                    {signedDelegation
+                      ? "Pay agents on Base mainnet via ERC-7710 delegation — no ETH required."
+                      : "Sign a delegation above to enable gasless on-chain payment."}
+                  </p>
+                  <button
+                    onClick={executeOnChain}
+                    disabled={!signedDelegation}
+                    className="px-4 py-1.5 rounded text-xs font-medium transition-all disabled:opacity-30"
+                    style={{ background: "linear-gradient(90deg,#3d7a5a,#4a7a49)", color: "#fff", border: "1px solid #4a7a4930" }}>
+                    Pay Agents On-Chain →
+                  </button>
+                </div>
+              )}
+
+              {onChainPayment.state === "executing" && (
+                <p className="text-[11px] text-[#4a7a49] animate-pulse">Submitting to 1Shot relayer…</p>
+              )}
+
+              {onChainPayment.state === "polling" && (
+                <p className="text-[11px] text-[#4a7a49] animate-pulse">
+                  Waiting for on-chain confirmation… task {onChainPayment.taskId?.slice(0, 8)}
+                </p>
+              )}
+
+              {onChainPayment.state === "confirmed" && onChainPayment.txHash && (
+                <div className="space-y-1">
+                  <p className="text-[11px] text-[#4a7a49]">✓ Agents paid on Base mainnet via ERC-7710</p>
+                  <a
+                    href={`https://basescan.org/tx/${onChainPayment.txHash}`}
+                    target="_blank"
+                    rel="noopener"
+                    className="text-[10px] font-mono text-[#4a7a49] underline decoration-[#4a7a49]/40 hover:text-[#6aaa69]">
+                    {onChainPayment.txHash.slice(0, 12)}…{onChainPayment.txHash.slice(-8)} ↗ basescan
+                  </a>
+                </div>
+              )}
+
+              {onChainPayment.state === "failed" && (
+                <div>
+                  <p className="text-[11px] text-red-400/70">Payment failed: {onChainPayment.error}</p>
+                  <button onClick={() => setOnChainPayment({ state: "idle" })}
+                    className="text-[10px] text-white/30 hover:text-white/60 mt-1">retry</button>
+                </div>
+              )}
+            </div>
+          )}
         </main>
 
         {/* Right panel — Live Feed */}
@@ -588,7 +727,7 @@ function Home() {
                             {e.status}
                           </span>
                         </td>
-                        <td>{e.txHash ? <a href={`https://sepolia.basescan.org/tx/${e.txHash}`} target="_blank" rel="noopener" className="text-[#4a7a49] underline">{e.txHash.slice(0,8)}…</a> : e.txId ? <span className="text-white/25">{e.txId.slice(0,8)}…</span> : "—"}</td>
+                        <td>{e.txHash ? <a href={`https://basescan.org/tx/${e.txHash}`} target="_blank" rel="noopener" className="text-[#4a7a49] underline">{e.txHash.slice(0,8)}…</a> : e.txId ? <span className="text-white/25">{e.txId.slice(0,8)}…</span> : "—"}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -613,7 +752,7 @@ function Home() {
                         <td className="pr-3 font-mono">{tx.to_address ? tx.to_address.slice(0,6)+"…"+tx.to_address.slice(-4) : "—"}</td>
                         <td className="pr-3 text-[#4a7a49]">${tx.amount_usdc?.toFixed(4)}</td>
                         <td className="pr-3"><span className="text-[9px] px-1 rounded" style={{ background: "#4a7a4918", color: "#4a7a49" }}>{tx.status}</span></td>
-                        <td>{tx.tx_hash ? <a href={`https://sepolia.basescan.org/tx/${tx.tx_hash}`} target="_blank" rel="noopener" className="text-[#4a7a49] underline">{tx.tx_hash.slice(0,8)}…</a> : "—"}</td>
+                        <td>{tx.tx_hash ? <a href={`https://basescan.org/tx/${tx.tx_hash}`} target="_blank" rel="noopener" className="text-[#4a7a49] underline">{tx.tx_hash.slice(0,8)}…</a> : "—"}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -624,14 +763,29 @@ function Home() {
 
           {activeTab === "delegation" && (
             <div className="p-4 h-full overflow-auto">
-              {delegations.length === 0 ? (
-                <div>
-                  <p className="text-white/20 text-xs italic mb-2">No delegation chain found. Run setup.js first.</p>
-                  <p className="text-white/15 text-[11px]">npm run setup</p>
+              <p className="text-[10px] text-white/30 mb-3">ERC-7710 Delegation Chain — 1Shot Gasless Execution on Base</p>
+              {/* Live signed delegation info */}
+              {signedDelegation ? (
+                <div className="space-y-2 mb-3">
+                  <div className="rounded border border-[#4a7a49]/20 bg-[#4a7a49]/5 px-3 py-2">
+                    <p className="text-[10px] text-[#4a7a49] mb-1">✓ ERC-7710 Delegation Signed</p>
+                    <p className="text-[9px] text-white/40 font-mono">Delegator: {signedDelegation.delegator.slice(0,12)}…{signedDelegation.delegator.slice(-6)}</p>
+                    <p className="text-[9px] text-white/40 font-mono">Delegate:  {signedDelegation.delegate.slice(0,12)}…{signedDelegation.delegate.slice(-6)} (1Shot)</p>
+                    <p className="text-[9px] text-white/30 mt-1">Chain: Base mainnet · Scheme: erc20TransferAmount</p>
+                    <div className="mt-1 flex gap-1">
+                      {signedDelegation.caveats.slice(0, 2).map((c: any, i) => (
+                        <span key={i} className="text-[8px] px-1 rounded border border-white/10 text-white/25 font-mono">{c.enforcer.slice(0,6)}…</span>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               ) : (
+                <p className="text-[10px] text-white/20 italic mb-3">Connect wallet and click "Sign Delegation" to create an ERC-7710 delegation.</p>
+              )}
+
+              {/* Static delegation chain from backend */}
+              {delegations.length > 0 && (
                 <div className="space-y-2">
-                  <p className="text-[10px] text-white/30 mb-3">ERC-7710 Delegation Chain — A2A Coordination with Redelegation</p>
                   {delegations.map((d, i) => (
                     <div key={i} className="flex items-center gap-3 rounded border border-white/6 px-3 py-2" style={{ marginLeft: i === 0 ? 0 : 16 }}>
                       <div className="text-[10px] text-white/25 w-4">{i === 0 ? "①" : "└"}</div>
@@ -642,15 +796,20 @@ function Home() {
                           {d.signed && <span className="text-[9px] text-[#4a7a49]">✓ signed</span>}
                         </div>
                         <p className="text-[9px] text-white/25 font-mono">{d.to?.slice(0,10)}…{d.to?.slice(-6)} ← {d.from?.slice(0,6)}…</p>
-                        {d.authority && <p className="text-[9px] text-white/15">authority: {d.authority}</p>}
                       </div>
                     </div>
                   ))}
-                  {permissionGranted && (
-                    <div className="mt-2 px-3 py-2 rounded border border-[#4a7a49]/20 bg-[#4a7a49]/5">
-                      <p className="text-[10px] text-[#4a7a49]">✓ ERC-7715 permissions granted by {userAddress?.slice(0,6)}…{userAddress?.slice(-4)}</p>
-                    </div>
-                  )}
+                </div>
+              )}
+
+              {/* On-chain payment result */}
+              {onChainPayment.state === "confirmed" && onChainPayment.txHash && (
+                <div className="mt-3 px-3 py-2 rounded border border-[#4a7a49]/20 bg-[#4a7a49]/5">
+                  <p className="text-[10px] text-[#4a7a49] mb-1">✓ On-chain settlement complete</p>
+                  <a href={`https://basescan.org/tx/${onChainPayment.txHash}`} target="_blank" rel="noopener"
+                    className="text-[9px] font-mono text-[#4a7a49] underline">
+                    {onChainPayment.txHash.slice(0, 16)}… ↗
+                  </a>
                 </div>
               )}
             </div>

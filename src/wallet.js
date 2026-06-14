@@ -10,6 +10,7 @@ const USDC_DECIMALS = 6;
 
 class AgentWallet {
   constructor(privateKey, _unused, network) {
+    this.privateKey = privateKey;
     this.signer = new ethers.Wallet(privateKey);
     this.address = this.signer.address;
     this.network = network;
@@ -29,8 +30,7 @@ class AgentWallet {
 
   /**
    * Transfer USDC directly via signed ethers transaction.
-   * Falls back to in-memory simulation if the RPC call fails
-   * (e.g. wallet not funded yet during dev/hackathon demo).
+   * Falls back to simulated status if wallet has no ETH for gas.
    */
   async transfer(toAddress, amountUsdc, memo = '') {
     const amount = ethers.parseUnits(String(amountUsdc), USDC_DECIMALS);
@@ -50,9 +50,8 @@ class AgentWallet {
         memo,
       };
     } catch (err) {
-      // Not enough ETH for gas or wallet not funded — simulate for demo
       const simulatedId = '0xsim_' + Math.random().toString(16).slice(2, 18);
-      console.warn(`[wallet] Transfer simulation (${err.message.split('\n')[0]})`);
+      console.warn(`[wallet] Transfer simulated (${err.message.split('\n')[0]})`);
       return {
         txId: simulatedId,
         txHash: null,
@@ -60,10 +59,6 @@ class AgentWallet {
         memo,
       };
     }
-  }
-
-  getSmartAccountAddress() {
-    return this.address;
   }
 
   async signMessage(message) {

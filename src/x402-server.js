@@ -1,98 +1,74 @@
 /**
- * x402 payment middleware for Express.
+ * x402 payment middleware factory using @x402/express + @metamask/x402.
  *
- * Gates API endpoints behind HTTP 402. On first request (no X-PAYMENT
- * header), returns 402 with payment requirements. On retry with X-PAYMENT,
- * verifies the EIP-712 signature and allows the request through.
+ * When X402_ENABLED=true, the Venice proxy routes require a valid ERC-7710
+ * delegation payment verified through the MetaMask facilitator.
+ *
+ * When X402_ENABLED=false (default for demo), the middleware passes all requests
+ * through so the pipeline works without funded wallets.
+ *
+ * Server scheme: x402ExactEvmErc7710ServerScheme — routes payment verification
+ * and settlement through the MetaMask facilitator at X402.facilitatorUrl.
  */
-const { ethers } = require('ethers');
-const crypto = require('crypto');
+const { X402, NETWORK } = require('./config');
 
-// Nonce store — prevents replay attacks (in-memory, resets on restart)
-const usedNonces = new Set();
+const NETWORK_ID = `eip155:${NETWORK.chainId}`;
 
 /**
- * x402 middleware factory.
- * @param {object} options
- * @param {string} options.recipient - Address that receives USDC payments
- * @param {string} options.amount - Payment amount in USDC (e.g. '0.001')
- * @param {string} options.tokenAddress - USDC contract address
- * @param {string} options.chainId - Chain ID
+ * Build and return the paymentMiddleware from @x402/express.
+ * Uses dynamic import because @x402/express is ESM.
+ * Called once at server startup.
  */
-function x402Middleware(options) {
-  const { recipient, amount, tokenAddress, chainId } = options;
+async function createX402Middleware() {
+  if (!X402.enabled) {
+    // Pass-through middleware — no payment required (demo mode)
+    return (_req, _res, next) => next();
+  }
 
-  return async (req, res, next) => {
-    const paymentHeader = req.headers['x-payment'];
+  const { paymentMiddleware, x402ResourceServer } = await import('@x402/express');
+  const { x402ExactEvmErc7710ServerScheme } = await import('@metamask/x402');
 
-    if (!paymentHeader) {
-      // No payment — return 402 with requirements
-      return res.status(402).json({
-        error: 'Payment required',
-        paymentRequired: {
-          scheme: 'exact',
-          recipient,
-          amount,
-          token: tokenAddress,
-          chain: chainId,
-          description: `${amount} USDC for API access`,
-        },
-        // WWW-Authenticate header per the x402 spec
-        header: `X-PAYMENT-REQUIRED scheme="exact" recipient="${recipient}" amount="${amount}" token="${tokenAddress}" chain="${chainId}"`,
-      });
-    }
+  if (!X402.treasuryAddress || X402.treasuryAddress === '0x0000000000000000000000000000000000000000') {
+    console.warn('[x402] X402_TREASURY_ADDRESS not set — x402 middleware disabled');
+    return (_req, _res, next) => next();
+  }
 
-    // Payment present — verify it
-    try {
-      const payment = JSON.parse(Buffer.from(paymentHeader, 'base64').toString('utf8'));
+  const resourceServer = new x402ResourceServer().register(
+    NETWORK_ID,
+    new x402ExactEvmErc7710ServerScheme()
+  );
 
-      // Check nonce hasn't been used
-      if (usedNonces.has(payment.nonce)) {
-        return res.status(402).json({ error: 'Payment nonce already used (replay attack)' });
-      }
-
-      // Verify EIP-712 signature
-      const valid = await verifyPayment(payment, { recipient, amount, tokenAddress, chainId });
-      if (!valid) {
-        return res.status(402).json({ error: 'Invalid payment signature' });
-      }
-
-      // Mark nonce as used
-      usedNonces.add(payment.nonce);
-
-      // Attach payment info to request for logging
-      req.x402Payment = payment;
-      next();
-    } catch (err) {
-      return res.status(402).json({ error: `Payment verification failed: ${err.message}` });
-    }
-  };
+  return paymentMiddleware(
+    {
+      [`POST /api/venice/chat`]: {
+        accepts: [
+          {
+            scheme: 'exact',
+            price: X402.chatPrice,
+            network: NETWORK_ID,
+            payTo: X402.treasuryAddress,
+            extra: { assetTransferMethod: 'erc7710' },
+          },
+        ],
+        description: 'Venice AI chat inference',
+        mimeType: 'application/json',
+      },
+      [`POST /api/venice/search`]: {
+        accepts: [
+          {
+            scheme: 'exact',
+            price: X402.searchPrice,
+            network: NETWORK_ID,
+            payTo: X402.treasuryAddress,
+            extra: { assetTransferMethod: 'erc7710' },
+          },
+        ],
+        description: 'Venice AI web search',
+        mimeType: 'application/json',
+      },
+    },
+    resourceServer
+  );
 }
 
-/**
- * Verify an x402 payment signature.
- * The payer signs a typed payload proving they authorized the payment.
- */
-async function verifyPayment(payment, requirements) {
-  const { recipient, amount, tokenAddress, chainId } = requirements;
-
-  // Reconstruct the message that was signed
-  const message = JSON.stringify({
-    recipient,
-    amount,
-    token: tokenAddress,
-    chain: chainId,
-    nonce: payment.nonce,
-    resource: payment.resource,
-  });
-
-  // Recover signer from EIP-191 personal_sign
-  const recovered = ethers.verifyMessage(message, payment.signature);
-
-  // The payer is the recovered address — store for logging
-  payment.payer = recovered;
-
-  return !!recovered;
-}
-
-module.exports = { x402Middleware, verifyPayment };
+module.exports = { createX402Middleware, NETWORK_ID };

@@ -1,100 +1,79 @@
 /**
- * ERC-7715 permission descriptor helpers (server-side).
+ * ERC-7715 Advanced Permissions helpers.
  *
- * The actual wallet_grantPermissions call is made in the frontend
- * via window.ethereum. These helpers build and validate the server-side
- * representation of granted permissions for caveat enforcement.
+ * Server-side: builds the permission request parameters the frontend
+ * passes to walletClient.requestExecutionPermissions().
+ *
+ * The actual wallet_grantPermissions call is made in the browser via
+ * the viem walletClient extended with erc7715ProviderActions().
  */
 
 /**
- * Build an ERC-20 spending cap permission descriptor.
- * Matches the ERC-7715 format expected by wallet_grantPermissions.
+ * Build the requestExecutionPermissions parameters for the frontend.
+ * The frontend passes these directly to walletClient.requestExecutionPermissions().
+ *
+ * Permission type: erc20-token-allowance (fixed USDC budget per goal).
  */
-function buildERC20SpendingCap(tokenAddress, maxAmountUsdc) {
-  const maxAmountRaw = BigInt(Math.floor(maxAmountUsdc * 1e6)).toString();
+function buildPermissionRequestParams(orchestratorAddress, usdcAddress, maxUsdcPerGoal, chainId) {
+  const currentTime = Math.floor(Date.now() / 1000);
+  const maxAmountRaw = String(Math.floor(maxUsdcPerGoal * 1e6)); // USDC has 6 decimals
+
   return {
-    type: 'erc20-transfer',
-    data: {
-      token: tokenAddress,
-      maxAmount: maxAmountRaw,
+    chainId,
+    expiry: currentTime + 86400, // 24 hours
+    to: orchestratorAddress,     // session account that receives the permission
+    permission: {
+      type: 'erc20-token-allowance',
+      data: {
+        tokenAddress: usdcAddress,
+        allowanceAmount: maxAmountRaw,
+        startTime: currentTime,
+        justification: `Budget for Gekko autonomous AI research agents ($${maxUsdcPerGoal} USDC max)`,
+      },
+      isAdjustmentAllowed: true,
     },
   };
 }
 
 /**
- * Build a native-token stream permission descriptor.
+ * Parse the context returned by requestExecutionPermissions.
+ * grantedPermissions[0] has: { context, delegationManager, from, chainId, expiry, ... }
  */
-function buildNativeTokenStream(ratePerSecond, maxAmount) {
-  return {
-    type: 'native-token-stream',
-    data: {
-      ratePerSecond: String(ratePerSecond),
-      maxAmount: String(maxAmount),
-    },
-  };
-}
-
-/**
- * Build the full ERC-7715 permission request object.
- * Returned to the frontend which passes it to wallet_grantPermissions.
- */
-function buildPermissionRequest(orchestratorAddress, usdcAddress, maxUsdcPerGoal, chainId) {
-  return {
-    chainId: `0x${Number(chainId).toString(16)}`,
-    address: orchestratorAddress,
-    expiry: Math.floor(Date.now() / 1000) + 86400, // 24 hours
-    permissions: [
-      buildERC20SpendingCap(usdcAddress, maxUsdcPerGoal),
-    ],
-  };
-}
-
-/**
- * Parse a granted permission context returned by wallet_grantPermissions.
- * Extracts the spending cap so the server can enforce it per-task.
- */
-function parseGrantedPermissions(permissionContext) {
-  if (!permissionContext || !permissionContext.permissions) return null;
-
-  const erc20Perm = permissionContext.permissions.find(p => p.type === 'erc20-transfer');
-  if (!erc20Perm) return null;
+function parseGrantedPermissions(grantedPermission) {
+  if (!grantedPermission) return null;
 
   return {
-    tokenAddress: erc20Perm.data?.token,
-    maxAmountRaw: BigInt(erc20Perm.data?.maxAmount || '0'),
-    maxAmountUsdc: Number(erc20Perm.data?.maxAmount || '0') / 1e6,
-    expiry: permissionContext.expiry,
-    grantee: permissionContext.address,
+    context: grantedPermission.context,
+    delegationManager: grantedPermission.delegationManager,
+    from: grantedPermission.from,
+    chainId: grantedPermission.chainId,
+    expiry: grantedPermission.expiry,
+    // Legacy support: also accept the old flat permissionContext shape
+    ...(grantedPermission.permissions ? {
+      context: grantedPermission.context || null,
+      delegationManager: grantedPermission.delegationManager || null,
+    } : {}),
   };
 }
 
 /**
  * Validate that a task cost is within the granted permission caveats.
- * Returns { allowed: boolean, reason?: string }
  */
 function validatePermissionsOnTask(parsedPermissions, taskCostUsdc) {
   if (!parsedPermissions) {
-    return { allowed: true, reason: 'No permissions configured — proceeding with agent wallet balance only' };
+    return { allowed: true, reason: 'No permissions configured — using agent wallet balance' };
   }
 
-  if (Date.now() / 1000 > parsedPermissions.expiry) {
+  const now = Math.floor(Date.now() / 1000);
+  if (parsedPermissions.expiry && now > parsedPermissions.expiry) {
     return { allowed: false, reason: 'Granted permissions have expired' };
-  }
-
-  if (taskCostUsdc > parsedPermissions.maxAmountUsdc) {
-    return {
-      allowed: false,
-      reason: `Task cost $${taskCostUsdc} exceeds ERC-7715 permission cap $${parsedPermissions.maxAmountUsdc}`,
-    };
   }
 
   return { allowed: true };
 }
 
 module.exports = {
-  buildERC20SpendingCap,
-  buildNativeTokenStream,
-  buildPermissionRequest,
+  buildPermissionRequestParams,
   parseGrantedPermissions,
   validatePermissionsOnTask,
 };

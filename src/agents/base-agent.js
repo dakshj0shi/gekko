@@ -1,4 +1,3 @@
-const X402Client = require('../x402-client');
 const { v4: uuidv4 } = require('uuid');
 const dispatchEvents = require('../event-bus');
 const { X402 } = require('../config');
@@ -11,14 +10,17 @@ class BaseAgent {
    * @param {string} config.name
    * @param {string} config.role
    * @param {AgentWallet} config.agentWallet
+   * @param {Function} [config.fetchWithPayment] - x402-aware fetch from createX402FetchForAgent()
    */
-  constructor({ name, role, agentWallet }) {
+  constructor({ name, role, agentWallet, fetchWithPayment }) {
     this.id = uuidv4();
     this.name = name;
     this.role = role;
     this.agentWallet = agentWallet;
     this.walletAddress = agentWallet?.address || null;
-    this.x402 = agentWallet ? new X402Client(agentWallet) : null;
+    // fetchWithPayment handles the full x402 ERC-7710 delegation payment flow.
+    // Falls back to global fetch if not provided (demo mode / unfunded).
+    this.fetchWithPayment = fetchWithPayment || fetch.bind(globalThis);
     this.taskLog = [];
   }
 
@@ -41,9 +43,6 @@ class BaseAgent {
     return this.agentWallet.getBalance();
   }
 
-  /**
-   * Send USDC to another agent via the 1Shot relayer (gas paid in USDC).
-   */
   async payAgent(recipientAddress, amount, taskDescription) {
     this.log('payment_initiated', {
       type: 'payment',
@@ -66,29 +65,34 @@ class BaseAgent {
 
   /**
    * Call a Venice AI endpoint through the local x402-gated proxy.
-   * Each call costs a USDC micropayment (x402 protocol).
-   * @param {string} provider - 'venice' (ignored — all calls route to Venice)
+   * Uses fetchWithPayment which automatically handles the 402 → ERC-7710
+   * delegation payment → retry flow when X402_ENABLED=true.
+   *
+   * @param {string} _provider - ignored (all calls route to Venice)
    * @param {string} endpoint - 'chat' | 'search'
    * @param {object} params - Request body
    */
-  async callAPI(provider, endpoint, params) {
+  async callAPI(_provider, endpoint, params) {
     this.log('api_call', { type: 'api', provider: 'venice', endpoint });
 
     const url = `${X402.endpointBase}/api/venice/${endpoint}`;
 
-    const result = await this.x402.fetchJSON(url, {
+    const response = await this.fetchWithPayment(url, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(params),
     });
 
-    this.log('api_call_completed', {
-      type: 'api',
-      provider: 'venice',
-      endpoint,
-      success: true,
-    });
+    if (!response.ok) {
+      const errText = await response.text().catch(() => response.status);
+      throw new Error(`Venice ${endpoint} failed (${response.status}): ${errText}`);
+    }
 
-    return { data: result };
+    const data = await response.json();
+
+    this.log('api_call_completed', { type: 'api', provider: 'venice', endpoint, success: true });
+
+    return { data };
   }
 
   registerService(registry, serviceDef) {

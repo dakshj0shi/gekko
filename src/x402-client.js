@@ -1,110 +1,65 @@
 /**
- * x402 payment client for agents.
+ * x402 payment client for agents using ERC-7710 delegation.
  *
- * Wraps fetch() with x402 protocol support:
- *   1. Make request
- *   2. If 402 received, sign a payment header using agent's wallet
- *   3. Retry with X-PAYMENT header
- *   4. Return the paid response
+ * Each agent is wrapped as a MetaMask Smart Account (Hybrid implementation).
+ * createx402DelegationProvider creates an open root delegation from the agent's
+ * smart account; the MetaMask facilitator redeems it for USDC settlement.
+ *
+ * Returns a fetch-compatible function (wrapFetchWithPayment) that automatically
+ * handles the 402 → pay → retry flow when agents call Venice AI proxy routes.
+ *
+ * When X402_ENABLED=false, returns standard fetch (no payment required).
  */
-const { ethers } = require('ethers');
-const { v4: uuidv4 } = require('uuid');
+const { NETWORK, X402 } = require('./config');
 
-class X402Client {
-  /**
-   * @param {AgentWallet} agentWallet - The agent's wallet for signing payments
-   */
-  constructor(agentWallet) {
-    this.wallet = agentWallet;
+/**
+ * Create a payment-aware fetch function for an agent.
+ * Uses dynamic imports because smart-accounts-kit and x402 are ESM.
+ *
+ * @param {string} privateKey - Agent EOA private key (0x-prefixed hex)
+ * @returns {Promise<Function>} - fetch-compatible function
+ */
+async function createX402FetchForAgent(privateKey) {
+  if (!X402.enabled) {
+    // Demo mode — return standard fetch, no payment headers needed
+    return fetch.bind(globalThis);
   }
 
-  /**
-   * Make an HTTP request with x402 payment support.
-   * Automatically handles 402 responses by signing and retrying.
-   */
-  async fetch(url, options = {}) {
-    // First attempt — no payment
-    const res = await fetch(url, options);
-
-    if (res.status !== 402) {
-      return res;
-    }
-
-    // Parse payment requirements from 402 response
-    const body = await res.json();
-    const requirements = body.paymentRequired;
-
-    if (!requirements) {
-      throw new Error('402 response missing paymentRequired field');
-    }
-
-    // Sign the payment
-    const paymentHeader = await this._signPayment(requirements, url);
-
-    // Retry with payment
-    const paidRes = await fetch(url, {
-      ...options,
-      headers: {
-        ...(options.headers || {}),
-        'X-PAYMENT': paymentHeader,
-      },
-    });
-
-    return paidRes;
+  if (!privateKey) {
+    console.warn('[x402-client] No private key — using passthrough fetch');
+    return fetch.bind(globalThis);
   }
 
-  /**
-   * Sign a payment authorization for x402.
-   * Returns a base64-encoded JSON payment object.
-   * @private
-   */
-  async _signPayment(requirements, resource) {
-    const nonce = uuidv4();
+  const { createPublicClient, http } = await import('viem');
+  const { baseSepolia, base } = await import('viem/chains');
+  const { privateKeyToAccount } = await import('viem/accounts');
+  const { toMetaMaskSmartAccount, Implementation } = await import('@metamask/smart-accounts-kit');
+  const { createx402DelegationProvider } = await import('@metamask/smart-accounts-kit/experimental');
+  const { x402Erc7710Client } = await import('@metamask/x402');
+  const { x402Client: CoreClient, x402HTTPClient } = await import('@x402/fetch');
+  const { wrapFetchWithPayment } = await import('@x402/fetch');
 
-    const message = JSON.stringify({
-      recipient: requirements.recipient,
-      amount: requirements.amount,
-      token: requirements.token,
-      chain: requirements.chain,
-      nonce,
-      resource,
-    });
+  const chain = NETWORK.chainId === 8453 ? base : baseSepolia;
+  const publicClient = createPublicClient({ chain, transport: http(NETWORK.rpcUrl) });
 
-    const signature = await this.wallet.signMessage(message);
+  const account = privateKeyToAccount(privateKey);
 
-    const payment = {
-      recipient: requirements.recipient,
-      amount: requirements.amount,
-      token: requirements.token,
-      chain: requirements.chain,
-      nonce,
-      resource,
-      signature,
-      payer: this.wallet.address,
-    };
+  const smartAccount = await toMetaMaskSmartAccount({
+    client: publicClient,
+    implementation: Implementation.Hybrid,
+    deployParams: [account.address, [], [], []],
+    deploySalt: '0x',
+    signer: { account },
+  });
 
-    return Buffer.from(JSON.stringify(payment)).toString('base64');
-  }
+  const erc7710Client = new x402Erc7710Client({
+    delegationProvider: createx402DelegationProvider({ account: smartAccount }),
+  });
 
-  /**
-   * Convenience: fetch JSON with x402 support.
-   */
-  async fetchJSON(url, options = {}) {
-    const res = await this.fetch(url, {
-      ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(options.headers || {}),
-      },
-    });
+  const coreClient = new CoreClient().register('eip155:*', erc7710Client);
+  const httpClient = new x402HTTPClient(coreClient);
 
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`x402 request failed ${res.status}: ${err}`);
-    }
-
-    return res.json();
-  }
+  return wrapFetchWithPayment(fetch, httpClient);
 }
 
-module.exports = X402Client;
+module.exports = { createX402FetchForAgent };
