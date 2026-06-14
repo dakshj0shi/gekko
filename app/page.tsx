@@ -100,7 +100,7 @@ const STEP_LABELS = [
   "Release payment — 1Shot USDC relay",
   "Validator fact-checks via Venice reasoning",
   "Writer synthesizes report via Venice AI",
-  "Final payment settled on Base mainnet",
+  "Final payment settled on Base Sepolia",
 ];
 const STEP_BADGES = ["smart account","marketplace","ERC-7710","ERC-7715","x402 ERC-7710","USDC transfer","Venice reasoning","Venice AI","Base L2"];
 
@@ -147,6 +147,8 @@ function Home() {
   const [signingDelegation, setSigningDelegation] = useState(false);
   const [signedDelegation, setSignedDelegation] = useState<DelegationRecord | null>(null);
   const [smartAccountAddress, setSmartAccountAddress] = useState<string | null>(null);
+  const [smartAccountDeployed, setSmartAccountDeployed] = useState<boolean | null>(null);
+  const [deployingSmartAccount, setDeployingSmartAccount] = useState(false);
 
   /* 1Shot on-chain payment */
   const [onChainPayment, setOnChainPayment] = useState<OnChainPayment>({ state: "idle" });
@@ -270,13 +272,45 @@ function Home() {
     if (!eth) { alert("MetaMask not found. Please install MetaMask."); return; }
     try {
       const accounts = await eth.request({ method: "eth_requestAccounts" });
-      setUserAddress(accounts[0]);
+      const owner = accounts[0];
+      setUserAddress(owner);
+      // Derive SA address and check if deployed on Base Sepolia
+      try {
+        const { getSmartAccountAddress } = await import("./lib/smartAccount");
+        const sa = await getSmartAccountAddress(owner);
+        setSmartAccountAddress(sa);
+        const rpcRes = await fetch("https://sepolia.base.org", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", method: "eth_getCode", params: [sa, "latest"], id: 1 }),
+        });
+        const rpcData = await rpcRes.json();
+        const code = rpcData?.result;
+        setSmartAccountDeployed(!!code && code !== "0x");
+      } catch {}
     } catch (err: any) { console.error("Connect failed:", err); }
+  }
+
+  async function deploySmartAccountHandler() {
+    const eth = (window as any).ethereum;
+    if (!eth || !userAddress) { alert("Connect your wallet first."); return; }
+    setDeployingSmartAccount(true);
+    try {
+      const { deploySmartAccount } = await import("./lib/smartAccount");
+      const sa = await deploySmartAccount(eth, userAddress);
+      setSmartAccountAddress(sa);
+      setSmartAccountDeployed(true);
+    } catch (err: any) {
+      console.error("Deploy failed:", err);
+      alert(`Deploy failed: ${err?.message ?? err}`);
+    } finally {
+      setDeployingSmartAccount(false);
+    }
   }
 
   /**
    * Sign an ERC-7710 delegation from the user's MetaMask Smart Account to 1Shot.
-   * MetaMask switches to Base mainnet, derives the smart account, and shows
+   * MetaMask switches to Base Sepolia, derives the smart account, and shows
    * an EIP-712 signing popup. The signed delegation is stored and passed to
    * every goal POST and to /api/execute for on-chain payment.
    */
@@ -399,11 +433,22 @@ function Home() {
               className="text-xs px-3 py-1 rounded bg-[#4a7a49]/20 border border-[#4a7a49]/30 text-[#4a7a49] hover:bg-[#4a7a49]/30 transition-colors">
               Connect Wallet
             </button>
+          ) : smartAccountDeployed === false ? (
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-white/30">{userAddress.slice(0,6)}…{userAddress.slice(-4)}</span>
+              <button onClick={deploySmartAccountHandler} disabled={deployingSmartAccount}
+                className="text-xs px-3 py-1 rounded bg-amber-900/30 border border-amber-600/30 text-amber-400 hover:bg-amber-900/50 transition-colors animate-pulse disabled:opacity-50 disabled:animate-none">
+                {deployingSmartAccount ? "Deploying…" : "Deploy Smart Account"}
+              </button>
+            </div>
           ) : !delegationSigned ? (
-            <button onClick={signDelegation} disabled={signingDelegation}
-              className="text-xs px-3 py-1 rounded bg-[#3d7a5a]/20 border border-[#3d7a5a]/30 text-[#3d7a5a] hover:bg-[#3d7a5a]/30 transition-colors animate-pulse disabled:opacity-50 disabled:animate-none">
-              {signingDelegation ? "Signing…" : "Sign Delegation"}
-            </button>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-white/30">{userAddress.slice(0,6)}…{userAddress.slice(-4)}</span>
+              <button onClick={signDelegation} disabled={signingDelegation}
+                className="text-xs px-3 py-1 rounded bg-[#3d7a5a]/20 border border-[#3d7a5a]/30 text-[#3d7a5a] hover:bg-[#3d7a5a]/30 transition-colors animate-pulse disabled:opacity-50 disabled:animate-none">
+                {signingDelegation ? "Signing…" : "Sign Delegation"}
+              </button>
+            </div>
           ) : (
             <div className="flex items-center gap-2 text-xs">
               <span className="w-2 h-2 rounded-full bg-[#4a7a49] shadow-[0_0_6px_#4a7a49]" />
@@ -467,7 +512,7 @@ function Home() {
                 <p className="text-[9px] text-[#4a7a49] mb-0.5">✓ 1Shot delegation signed</p>
                 <p className="text-[8px] text-white/20 font-mono truncate">{signedDelegation.delegator.slice(0,10)}…</p>
                 <p className="text-[8px] text-white/15">→ 1Shot relayer</p>
-                <p className="text-[8px] text-white/15">Base mainnet</p>
+                <p className="text-[8px] text-white/15">Base Sepolia</p>
               </div>
             )}
           </div>
@@ -569,7 +614,7 @@ function Home() {
                 <div className="flex items-center gap-3">
                   <p className="text-[11px] text-white/40 flex-1">
                     {signedDelegation
-                      ? "Pay agents on Base mainnet via ERC-7710 delegation — no ETH required."
+                      ? "Pay agents on Base Sepolia via ERC-7710 delegation — no ETH required."
                       : "Sign a delegation above to enable gasless on-chain payment."}
                   </p>
                   <button
@@ -594,9 +639,9 @@ function Home() {
 
               {onChainPayment.state === "confirmed" && onChainPayment.txHash && (
                 <div className="space-y-1">
-                  <p className="text-[11px] text-[#4a7a49]">✓ Agents paid on Base mainnet via ERC-7710</p>
+                  <p className="text-[11px] text-[#4a7a49]">✓ Agents paid on Base Sepolia via ERC-7710</p>
                   <a
-                    href={`https://basescan.org/tx/${onChainPayment.txHash}`}
+                    href={`https://sepolia.basescan.org/tx/${onChainPayment.txHash}`}
                     target="_blank"
                     rel="noopener"
                     className="text-[10px] font-mono text-[#4a7a49] underline decoration-[#4a7a49]/40 hover:text-[#6aaa69]">
@@ -727,7 +772,7 @@ function Home() {
                             {e.status}
                           </span>
                         </td>
-                        <td>{e.txHash ? <a href={`https://basescan.org/tx/${e.txHash}`} target="_blank" rel="noopener" className="text-[#4a7a49] underline">{e.txHash.slice(0,8)}…</a> : e.txId ? <span className="text-white/25">{e.txId.slice(0,8)}…</span> : "—"}</td>
+                        <td>{e.txHash ? <a href={`https://sepolia.basescan.org/tx/${e.txHash}`} target="_blank" rel="noopener" className="text-[#4a7a49] underline">{e.txHash.slice(0,8)}…</a> : e.txId ? <span className="text-white/25">{e.txId.slice(0,8)}…</span> : "—"}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -752,7 +797,7 @@ function Home() {
                         <td className="pr-3 font-mono">{tx.to_address ? tx.to_address.slice(0,6)+"…"+tx.to_address.slice(-4) : "—"}</td>
                         <td className="pr-3 text-[#4a7a49]">${tx.amount_usdc?.toFixed(4)}</td>
                         <td className="pr-3"><span className="text-[9px] px-1 rounded" style={{ background: "#4a7a4918", color: "#4a7a49" }}>{tx.status}</span></td>
-                        <td>{tx.tx_hash ? <a href={`https://basescan.org/tx/${tx.tx_hash}`} target="_blank" rel="noopener" className="text-[#4a7a49] underline">{tx.tx_hash.slice(0,8)}…</a> : "—"}</td>
+                        <td>{tx.tx_hash ? <a href={`https://sepolia.basescan.org/tx/${tx.tx_hash}`} target="_blank" rel="noopener" className="text-[#4a7a49] underline">{tx.tx_hash.slice(0,8)}…</a> : "—"}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -764,6 +809,24 @@ function Home() {
           {activeTab === "delegation" && (
             <div className="p-4 h-full overflow-auto">
               <p className="text-[10px] text-white/30 mb-3">ERC-7710 Delegation Chain — 1Shot Gasless Execution on Base</p>
+
+              {/* Smart account deployment status */}
+              {smartAccountAddress && (
+                <div className={`mb-3 px-3 py-2 rounded border text-[10px] ${smartAccountDeployed === false ? "border-amber-600/30 bg-amber-900/10" : "border-white/8 bg-white/1"}`}>
+                  <p className="text-white/40 mb-0.5">Your Hybrid Smart Account (delegator)</p>
+                  <p className="font-mono text-white/60 text-[9px] break-all">{smartAccountAddress}</p>
+                  {smartAccountDeployed === false && (
+                    <div className="mt-1.5 space-y-1">
+                      <p className="text-amber-400 text-[9px]">Not deployed — click "Deploy Smart Account" in the top bar first.</p>
+                      <p className="text-white/30 text-[9px]">After deploying, send USDC to this address from <a href="https://faucet.circle.com" target="_blank" rel="noopener" className="text-[#4a7a49] underline">faucet.circle.com</a> (Base Sepolia), then sign the delegation.</p>
+                    </div>
+                  )}
+                  {smartAccountDeployed === true && (
+                    <p className="text-[#4a7a49] text-[9px] mt-1">✓ Deployed — fund with USDC and sign the delegation to pay agents.</p>
+                  )}
+                </div>
+              )}
+
               {/* Live signed delegation info */}
               {signedDelegation ? (
                 <div className="space-y-2 mb-3">
@@ -771,7 +834,7 @@ function Home() {
                     <p className="text-[10px] text-[#4a7a49] mb-1">✓ ERC-7710 Delegation Signed</p>
                     <p className="text-[9px] text-white/40 font-mono">Delegator: {signedDelegation.delegator.slice(0,12)}…{signedDelegation.delegator.slice(-6)}</p>
                     <p className="text-[9px] text-white/40 font-mono">Delegate:  {signedDelegation.delegate.slice(0,12)}…{signedDelegation.delegate.slice(-6)} (1Shot)</p>
-                    <p className="text-[9px] text-white/30 mt-1">Chain: Base mainnet · Scheme: erc20TransferAmount</p>
+                    <p className="text-[9px] text-white/30 mt-1">Chain: Base Sepolia · Scheme: functionCall (USDC transfer)</p>
                     <div className="mt-1 flex gap-1">
                       {signedDelegation.caveats.slice(0, 2).map((c: any, i) => (
                         <span key={i} className="text-[8px] px-1 rounded border border-white/10 text-white/25 font-mono">{c.enforcer.slice(0,6)}…</span>
@@ -806,7 +869,7 @@ function Home() {
               {onChainPayment.state === "confirmed" && onChainPayment.txHash && (
                 <div className="mt-3 px-3 py-2 rounded border border-[#4a7a49]/20 bg-[#4a7a49]/5">
                   <p className="text-[10px] text-[#4a7a49] mb-1">✓ On-chain settlement complete</p>
-                  <a href={`https://basescan.org/tx/${onChainPayment.txHash}`} target="_blank" rel="noopener"
+                  <a href={`https://sepolia.basescan.org/tx/${onChainPayment.txHash}`} target="_blank" rel="noopener"
                     className="text-[9px] font-mono text-[#4a7a49] underline">
                     {onChainPayment.txHash.slice(0, 16)}… ↗
                   </a>

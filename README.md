@@ -1,6 +1,6 @@
 # Gekko
 
-Autonomous AI agent marketplace with on-chain USDC payments on Base.
+Autonomous AI agent marketplace with on-chain USDC payments on Base Sepolia.
 
 Built for the **MetaMask Smart Accounts × 1Shot API × Venice AI** hackathon.
 
@@ -14,20 +14,20 @@ You submit a research goal. Four autonomous AI agents coordinate: the orchestrat
 
 | Layer | Chain | How |
 |-------|-------|-----|
-| Agent-to-agent | Base Sepolia | ethers.js direct USDC transfers |
-| User → Agents | Base mainnet | ERC-7710 delegation via MetaMask + 1Shot |
-
-The on-chain flow is gasless for the user — you sign a delegation once, and 1Shot's relayer executes the USDC transfers on your behalf with no ETH required.
+| User → Agents | Base Sepolia | ERC-7710 FunctionCall + erc20PeriodTransfer delegation via MetaMask Hybrid SA + 1Shot public relayer |
+| Agent → Venice AI | Base Sepolia | x402 HTTP 402 micropayments via ERC-7710 delegation from agent Hybrid smart accounts |
 
 ---
 
 ## Architecture
 
 ```
-User (MetaMask on Base mainnet)
+User (MetaMask Flask on Base Sepolia)
   │
-  │  signs ERC-7710 delegation
-  │  (grants 1Shot permission to spend USDC from smart account)
+  │  1. Deploy Hybrid Smart Account via SimpleFactory (~0.00005 ETH gas, one-time)
+  │     SA address ≠ EOA — derived deterministically from EOA via CREATE2
+  │  2. Sign ERC-7710 delegation (FunctionCall + erc20PeriodTransfer — 4 caveats)
+  │     Delegation target fetched live from relayer_getCapabilities
   │
   ▼
 Gekko Dashboard (Next.js)
@@ -36,26 +36,30 @@ Gekko Dashboard (Next.js)
   │
   ▼
 Orchestrator Agent (Express / Node.js)
-  ├── Research Agent  ← Venice AI (llama-3.3-70b + web search)
-  ├── Validator Agent ← Venice AI (deepseek-v3.2 reasoning)
-  └── Writer Agent    ← Venice AI (mistral-small-2603)
+  ├── Research Agent  ← Venice AI (llama-3.3-70b + web search)  [pays via x402]
+  ├── Validator Agent ← Venice AI (deepseek-v3.2 reasoning)       [pays via x402]
+  └── Writer Agent    ← Venice AI (mistral-small-2603)             [pays via x402]
   │
   │  mission complete
   │
   ▼
 User clicks "Pay Agents On-Chain"
   │
-  │  POST /api/execute (signed delegation + executions)
+  │  POST /api/execute (signed delegation)
+  │    → relayer_getCapabilities  (live fee collector + target)
+  │    → relayer_estimate7710Transaction  (gets context blob + required fee)
+  │    → relayer_send7710Transaction  (context blob required by relayer)
   │
   ▼
-1Shot Permissionless Relayer (Base mainnet)
-  ├── 0.01 USDC → 1Shot fee address
+1Shot Public Relayer — Base Sepolia (https://relayer.1shotapi.dev/relayers)
+  ├── verifies FunctionCall + erc20PeriodTransfer caveats on-chain
+  ├── 0.01 USDC → 1Shot fee collector
   ├── 0.05 USDC → Researcher wallet
   ├── 0.03 USDC → Validator wallet
   └── 0.05 USDC → Writer wallet
   │
   ▼
-BaseScan tx link displayed in dashboard
+Sepolia BaseScan tx link displayed in dashboard
 ```
 
 ---
@@ -64,29 +68,47 @@ BaseScan tx link displayed in dashboard
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | Next.js 15 (static export), React, Tailwind CSS |
+| Frontend | Next.js 16 (static export), React, Tailwind CSS, Framer Motion |
 | Backend | Node.js, Express |
 | AI Inference | Venice AI (private, censorship-resistant) |
-| Smart Accounts | MetaMask Hybrid Smart Account (`@metamask/smart-accounts-kit`) |
-| On-chain payments | ERC-7710 delegation + 1Shot permissionless relayer |
-| Agent payments | ethers v6 direct USDC transfers |
-| Micropayments | x402 protocol (`@metamask/x402`, disabled in demo) |
-| Testnet | Base Sepolia (agent wallets) |
-| Mainnet | Base (user → agent payments) |
-| USDC (mainnet) | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |
-| USDC (sepolia) | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
+| Smart Accounts (user) | MetaMask **Hybrid** via `@metamask/smart-accounts-kit` (deployed via SimpleFactory) |
+| Smart Accounts (agents) | MetaMask **Hybrid** via `@metamask/smart-accounts-kit` |
+| On-chain payments | ERC-7710 `FunctionCall` + `erc20PeriodTransfer` delegation + 1Shot public relayer |
+| Agent micropayments | x402 protocol (real HTTP 402 enforcement — agent pays per Venice call) |
+| Agent-to-agent payments | ethers v6 direct USDC transfers |
+| Testnet | Base Sepolia (chain 84532) — all payments |
+| USDC (Base Sepolia) | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
 
 ---
 
-## How 1Shot + ERC-7710 Works
+## Delegation Design
 
-1. **Connect MetaMask** — Gekko derives your counterfactual Hybrid Smart Account address (deterministic from your EOA).
-2. **Sign Delegation** — MetaMask switches to Base mainnet and asks you to sign an EIP-712 delegation granting 1Shot's relayer address permission to transfer USDC from your smart account (capped at 0.14 USDC).
-3. **Run Mission** — Agents do the research work. No on-chain activity yet.
-4. **Pay Agents On-Chain** — You click once. The server sends your signed delegation + the payment executions to 1Shot. The relayer executes all USDC transfers in a single gasless transaction on Base mainnet.
-5. **Confirm** — A BaseScan link appears when the transaction confirms.
+The ERC-7710 delegation uses **two complementary caveats** (matching Ruleo reference implementation):
 
-No ETH needed. No gas wallet. The 0.01 USDC fee covers gas for the entire batch.
+| Caveat | Type | Enforces |
+|--------|------|----------|
+| AllowedTargets | FunctionCall scope | Only the USDC contract can be called |
+| AllowedCalldata | FunctionCall scope | Only `transfer(address,uint256)` selector |
+| NativeTokenAmount | FunctionCall scope | Native ETH value = 0 |
+| Erc20PeriodTransfer | Explicit caveat | Total USDC spend ≤ budget in 24h window |
+
+The spending limit caveat is on-chain enforcement — the DelegationManager checks it before executing any transfer. The 24h window starts from delegation signing time; re-signing creates a fresh period.
+
+---
+
+## How It Works End-to-End
+
+1. **Connect MetaMask Flask** — Dashboard reads your EOA and derives your Hybrid SA address (different from EOA). Checks if SA is deployed via `eth_getCode`.
+2. **Deploy Smart Account** (one-time, if shown) — Click the amber "Deploy Smart Account" button. MetaMask shows a normal send-transaction popup. ~0.00005 ETH gas.
+3. **Fund the SA** — Get USDC at [faucet.circle.com](https://faucet.circle.com) (Base Sepolia). Send ≥0.14 USDC to your SA address (shown in the Delegation tab).
+4. **Sign Delegation** — Click "Sign Delegation". Dashboard fetches live `targetAddress` from 1Shot relayer, builds delegation with FunctionCall + erc20PeriodTransfer caveats, MetaMask shows one EIP-712 popup.
+5. **Run Mission** — Enter goal, set budget, click Launch. Agents research, validate, and write in parallel. Each Venice AI call is paid via x402 from the agent Hybrid smart accounts.
+6. **Pay Agents On-Chain** — Click once. Server:
+   - Fetches live fee collector from `relayer_getCapabilities`
+   - Calls `relayer_estimate7710Transaction` to get the context blob
+   - Adjusts fee if relayer requires different amount
+   - Calls `relayer_send7710Transaction` with context blob + memo
+7. **Confirm** — Dashboard polls every 3 seconds. When status = 200, shows the Sepolia BaseScan transaction link.
 
 ---
 
@@ -95,8 +117,9 @@ No ETH needed. No gas wallet. The 0.01 USDC fee covers gas for the entire batch.
 ### Prerequisites
 
 - Node.js 18+
-- MetaMask browser extension
-- USDC on Base mainnet (in your MetaMask smart account — see below)
+- MetaMask Flask browser extension (required for Hybrid SA control)
+- ~0.0001 ETH on Base Sepolia (for one-time SA deployment)
+- USDC on Base Sepolia — from [faucet.circle.com](https://faucet.circle.com)
 
 ### Install
 
@@ -107,7 +130,7 @@ npm install
 
 ### Configure
 
-Copy `.env.example` to `.env`. The file already has working agent keys and Venice API key for local development.
+Copy `.env.example` to `.env`. The file already has working agent keys and Venice API key.
 
 ### Start
 
@@ -115,13 +138,13 @@ Copy `.env.example` to `.env`. The file already has working agent keys and Venic
 # Terminal 1 — build frontend once
 npm run build
 
-# Terminal 2 — backend (agents + API, serves built frontend)
+# Terminal 2 — backend (serves built frontend + all API routes)
 npm start
 ```
 
 Open **http://localhost:3001**
 
-For frontend hot-reload during development:
+For frontend hot-reload:
 ```bash
 npm run dev        # Next.js on :3000
 npm run dev:server # Express on :3001
@@ -129,55 +152,63 @@ npm run dev:server # Express on :3001
 
 ---
 
-## Funding the Smart Account (Required for On-Chain Payments)
+## Funding Guide
 
-The ERC-7710 on-chain payment flow requires USDC in your MetaMask Hybrid Smart Account on Base mainnet. This is NOT your regular MetaMask EOA address — it's a counterfactual smart contract wallet derived from your EOA.
+### Step 1 — Get USDC on Base Sepolia
 
-**To get your smart account address:**
-1. Open http://localhost:3001
-2. Click "Connect Wallet"
-3. Your smart account address appears in the Delegation panel
+Visit [faucet.circle.com](https://faucet.circle.com), connect MetaMask, select **Base Sepolia**, claim USDC.
 
-**To fund it:**
-Send at least **0.14 USDC** to your smart account address on Base mainnet:
+### Step 2 — Deploy Your Hybrid Smart Account
+
+Connect wallet in the dashboard. If the amber "Deploy Smart Account" button appears (SA not yet deployed), click it. MetaMask shows a normal transaction confirmation — approve it. Uses ~0.00005 ETH.
+
+### Step 3 — Fund Your Hybrid SA (for user → agent payments)
+
+After deploying, the **Delegation tab** shows your SA address. Send ≥**0.14 USDC** to it:
 
 | Recipient | Amount | Purpose |
 |-----------|--------|---------|
-| 1Shot fee | 0.01 USDC | Relayer fee (mandatory, first execution) |
+| 1Shot fee | 0.01 USDC | Relayer fee (first in every batch) |
 | Researcher | 0.05 USDC | Research task payment |
 | Validator | 0.03 USDC | Validation task payment |
 | Writer | 0.05 USDC | Writing task payment |
 
-Bridge USDC to Base mainnet: https://bridge.base.org
+### Step 4 — Fund Agent Hybrid SAs (for x402 Venice payments)
+
+Each agent pays for Venice AI calls via x402. Get their Hybrid SA addresses:
+
+```bash
+curl http://localhost:3001/api/agent-smartaccounts
+```
+
+Send ~**0.01 USDC** to each `smartAccount` address. Without this, x402 payments fail silently and Venice calls go through without payment.
 
 ---
 
-## Full On-Chain Flow (End to End)
+## Full On-Chain Flow (Step by Step)
 
-1. `npm start` and open http://localhost:3001
-2. **Connect Wallet** — MetaMask popup, approve connection
-3. **Sign Delegation** — MetaMask switches to Base mainnet, sign EIP-712 delegation
-4. Enter a research goal and click **Launch Mission**
-5. Watch real-time progress in the Live Feed (SSE)
-6. When mission completes, the "Pay Agents On-Chain" panel appears
-7. Click **Pay Agents On-Chain** — server submits to 1Shot
-8. Dashboard polls for confirmation every 3 seconds
-9. When confirmed: BaseScan transaction link appears
+1. `npm run build && npm start` → open http://localhost:3001
+2. **Connect Wallet** — MetaMask Flask popup. Dashboard checks deployment status.
+3. **Deploy Smart Account** (if amber button shows) — approve tx in MetaMask.
+4. **Fund SA** — send USDC from faucet to your SA address (in Delegation tab).
+5. **Sign Delegation** — one EIP-712 MetaMask popup. Approve it.
+6. Enter goal, click **Launch Mission** — watch Live Feed.
+7. When mission completes, **Pay Agents On-Chain** panel appears.
+8. Click **Pay Agents On-Chain** — server runs estimate → send flow.
+9. Dashboard polls every 3s → confirms with BaseScan link.
 
 ---
 
 ## Agent Wallets
 
-| Agent | Address | Role |
-|-------|---------|------|
+| Agent | EOA Address (Base Sepolia) | Role |
+|-------|---------------------------|------|
 | Orchestrator | `0xF9bc59882a7d6D2Dd24ff3800F69CC459bDDCC62` | Coordinator |
 | Researcher | `0x6eB5e2011964a3D7Cf371aAbBD49545C70A7052c` | Venice web search |
-| Validator | `0x6eB5e2011964a3D7Cf371aAbBD49545C70A7052c` | Fact-checking |
+| Validator | `0x6eB5e2011964a3D7Cf371aAbBD49545C70A7052c` | Fact-checking (shares key with Researcher) |
 | Writer | `0x7cB1966270d9D257AD1EEE4bEb142622A9937494` | Report writing |
 
-Fund these with USDC on Base Sepolia to enable real agent-to-agent transfers. Without funds, payments simulate gracefully and the research pipeline still runs.
-
-Base Sepolia USDC faucet: https://faucet.circle.com
+Agent Hybrid SA addresses (for x402 USDC funding) differ from EOA — get from `GET /api/agent-smartaccounts`.
 
 ---
 
@@ -186,49 +217,41 @@ Base Sepolia USDC faucet: https://faucet.circle.com
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/api/goal` | Submit a research goal |
-| POST | `/api/execute` | Submit signed delegation to 1Shot, returns taskId |
+| POST | `/api/execute` | Run estimate→send flow via 1Shot, returns taskId |
 | GET | `/api/task-status?id=` | Poll 1Shot for on-chain tx confirmation |
+| GET | `/api/relayer-caps` | Live 1Shot targetAddress + feeCollector for delegation signing |
+| GET | `/api/agent-smartaccounts` | Hybrid smart account addresses for x402 USDC funding |
 | GET | `/api/health` | System status |
 | GET | `/api/balances` | USDC balances for all agent wallets |
 | GET | `/api/registry` | Registered services in the agent marketplace |
 | GET | `/api/escrows` | In-memory escrow sessions |
 | GET | `/api/transactions` | On-chain USDC Transfer events |
+| GET | `/api/events/stream` | SSE real-time stream of all agent actions |
 | GET | `/api/reasoning` | Agent decision log with full reasoning context |
 | GET | `/api/agents` | Agent names, roles, wallet addresses |
-| GET | `/api/events/stream` | SSE real-time stream of all agent actions |
 
 ---
 
-## Dashboard Panels
+## 1Shot Relayer Details
 
-- **Mission Control** — goal input, budget slider, Launch button
-- **Agent Roster** — live status of all four agents
-- **Live Feed** — real-time SSE stream of every action
-- **Report** — final synthesized output with markdown rendering
-- **Marketplace** — registered services with prices
-- **Transactions** — on-chain USDC transfers with BaseScan links
-- **Delegation** — your signed delegation details (delegator, delegate, caveats)
-- **Reasoning** — agent decision log
+| Setting | Value |
+|---------|-------|
+| Endpoint | `https://relayer.1shotapi.dev/relayers` |
+| Chain | Base Sepolia (84532) |
+| Type | Public relayer — no API key required |
+| Target address | Fetched live via `relayer_getCapabilities` |
+| Fee collector | Fetched live via `relayer_getCapabilities` |
+| JSON-RPC flow | `getCapabilities` → `estimate7710Transaction` → `send7710Transaction` → `getStatus` |
+| Status codes | 100=Queued, 110=Submitted, 200=Confirmed, 400=Rejected, 500=Reverted |
+| Context blob | Required: estimate returns it, send must include it |
 
 ---
 
 ## x402 Micropayments (Agent → Venice AI)
 
-x402 is a pay-per-call protocol built on ERC-7710 delegation. Every agent call to the Venice AI proxy requires a real USDC micropayment — the agent pays for what it uses, on-chain, automatically.
+x402 is a pay-per-call protocol using HTTP 402 responses. Every agent call to the Venice AI proxy triggers a real USDC micropayment from the agent's Hybrid smart account.
 
-**Status: enabled** (`X402_ENABLED=true`)
-
-### How it works
-
-```
-Agent → fetch('/api/venice/chat')
-     ← 402 Payment Required  ← server (x402/express middleware)
-  → x402 client detects 402
-  → agent smart account signs ERC-7710 delegation payment
-  → MetaMask facilitator settles on Base Sepolia
-  → retry with X-PAYMENT header
-     ← 200 OK + Venice response
-```
+**Status: enabled** (`X402_ENABLED=true`) — real HTTP 402 enforcement, not cosmetic
 
 ### Prices
 
@@ -237,19 +260,13 @@ Agent → fetch('/api/venice/chat')
 | `POST /api/venice/chat` | $0.001 USDC per call |
 | `POST /api/venice/search` | $0.0005 USDC per call |
 
-Payments go to the treasury wallet (`X402_TREASURY_ADDRESS` in `.env`).
+### Facilitator
 
-### What's needed to run with x402
+`https://tx-sentinel-base-sepolia.dev-api.cx.metamask.io/platform/v2/x402`
 
-Agent smart accounts on Base Sepolia need USDC to cover call costs. Each research mission makes roughly 3–6 Venice calls, so ~$0.003–$0.006 total per mission.
+### What's needed
 
-Agent smart account addresses are deterministic — derived from each agent's EOA private key using `toMetaMaskSmartAccount({ implementation: Implementation.Hybrid, deploySalt: '0x' })`.
-
-Fund from: https://faucet.circle.com (Base Sepolia USDC)
-
-### To disable x402 (demo/pass-through mode)
-
-Set `X402_ENABLED=false` in `.env` — Venice calls go through for free, no payment required.
+Fund each agent's **Hybrid smart account** with USDC. Get addresses from `GET /api/agent-smartaccounts`.
 
 ---
 
@@ -260,8 +277,6 @@ Set `X402_ENABLED=false` in `.env` — Venice calls go through for free, no paym
 | Web research | `llama-3.3-70b` + web search enabled |
 | Fact-checking | `deepseek-v3.2` |
 | Report writing | `mistral-small-2603` |
-
-Venice AI provides private, uncensored LLM inference with no request logging or data retention.
 
 ---
 

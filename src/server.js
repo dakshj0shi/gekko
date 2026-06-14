@@ -18,6 +18,8 @@ const { createX402FetchForAgent } = require('./x402-client');
 const { getDelegationChain } = require('./delegation');
 const { buildPermissionRequestParams, parseGrantedPermissions } = require('./permissions');
 const {
+  getCapabilities,
+  estimate7710Transaction,
   send7710Transaction,
   getTaskStatus,
   waitForTask,
@@ -26,6 +28,7 @@ const {
   USDC_BASE,
   ONESHOT_FEE_ADDRESS,
   ONESHOT_FEE_USDC,
+  ONESHOT_TARGET,
   BASE_EXPLORER,
 } = require('./oneshot');
 
@@ -432,17 +435,39 @@ app.post('/api/execute', async (req, res) => {
       return res.status(400).json({ error: 'signedDelegation required' });
     }
 
-    // Default recipients: Researcher + Validator + Writer on Base mainnet
-    // (same wallet addresses as Base Sepolia — derived from same private keys)
+    // Step 1: Get live relayer capabilities (target address + fee collector)
+    const caps = await getCapabilities();
+    const feeCollector = caps.feeCollector;
+
+    // Step 2: Default recipients — Researcher + Validator + Writer
     const payTo = recipients?.length ? recipients : [
       { address: AGENTS.researcher.address, amountUsdc: 0.05 },
       { address: AGENTS.validator.address,  amountUsdc: 0.03 },
       { address: AGENTS.writer.address,     amountUsdc: 0.05 },
     ];
 
-    const executions = buildAgentPaymentExecutions(payTo);
-    // Submit to 1Shot and return taskId immediately — frontend polls /api/task-status
-    const taskId = await send7710Transaction(signedDelegation, executions);
+    // Step 3: Build executions with mock fee (fee first, then agent transfers)
+    let feeAmount = ONESHOT_FEE_USDC; // 0.01 USDC default
+    let executions = buildAgentPaymentExecutions(payTo, feeCollector, feeAmount);
+
+    // Step 4: Estimate to get context blob and required fee
+    // The context blob MUST be forwarded to relayer_send7710Transaction
+    let estimate = await estimate7710Transaction(signedDelegation, executions);
+    const requiredFee = BigInt(estimate.requiredPaymentAmount || '0');
+
+    // Step 5: If relayer requires a different fee, rebuild executions and re-estimate
+    if (requiredFee > 0n && requiredFee !== feeAmount) {
+      console.log(`[execute] fee adjusted: ${feeAmount} → ${requiredFee}`);
+      feeAmount = requiredFee;
+      executions = buildAgentPaymentExecutions(payTo, feeCollector, feeAmount);
+      estimate = await estimate7710Transaction(signedDelegation, executions);
+    }
+
+    // Step 6: Submit to 1Shot with context from estimate
+    const taskId = await send7710Transaction(signedDelegation, executions, {
+      context: estimate.context,
+      memo: `gekko_${goalId || Date.now()}`,
+    });
 
     res.json({
       goalId,
@@ -459,6 +484,31 @@ app.post('/api/execute', async (req, res) => {
 });
 
 /**
+ * GET /api/relayer-caps
+ * Returns live 1Shot relayer capabilities: targetAddress (delegate for delegation.to)
+ * and feeCollector. Frontend uses targetAddress when signing the ERC-7710 delegation
+ * so the delegation.to always matches what the relayer expects.
+ */
+app.get('/api/relayer-caps', async (req, res) => {
+  try {
+    const caps = await getCapabilities();
+    res.json({
+      targetAddress: caps.targetAddress,
+      feeCollector:  caps.feeCollector,
+      chainId:       84532,
+    });
+  } catch (err) {
+    // Fall back to hardcoded constants if relayer is unreachable
+    console.warn('[relayer-caps] using fallback:', err.message);
+    res.json({
+      targetAddress: ONESHOT_TARGET,
+      feeCollector:  ONESHOT_FEE_ADDRESS,
+      chainId:       84532,
+    });
+  }
+});
+
+/**
  * GET /api/task-status?id=<taskId>
  * Poll 1Shot relayer for on-chain transaction status.
  */
@@ -470,6 +520,51 @@ app.get('/api/task-status', async (req, res) => {
   try {
     const status = await getTaskStatus(id);
     res.json(status);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/agent-smartaccounts
+ * Returns the Hybrid smart account addresses for each agent on Base Sepolia.
+ * These are the addresses that need USDC funding for x402 micropayments.
+ */
+app.get('/api/agent-smartaccounts', async (req, res) => {
+  try {
+    const { createPublicClient, http } = await import('viem');
+    const { baseSepolia } = await import('viem/chains');
+    const { privateKeyToAccount } = await import('viem/accounts');
+    const { toMetaMaskSmartAccount, Implementation } = await import('@metamask/smart-accounts-kit');
+
+    const publicClient = createPublicClient({ chain: baseSepolia, transport: http(NETWORK.rpcUrl) });
+
+    const agentKeys = [
+      { name: 'orchestrator', key: AGENTS.orchestrator.privateKey },
+      { name: 'researcher',   key: AGENTS.researcher.privateKey },
+      { name: 'validator',    key: AGENTS.validator.privateKey },
+      { name: 'writer',       key: AGENTS.writer.privateKey },
+    ];
+
+    const accounts = await Promise.all(agentKeys.map(async ({ name, key }) => {
+      if (!key) return { name, eoa: null, smartAccount: null };
+      const account = privateKeyToAccount(key);
+      const sa = await toMetaMaskSmartAccount({
+        client: publicClient,
+        implementation: Implementation.Hybrid,
+        deployParams: [account.address, [], [], []],
+        deploySalt: '0x',
+        signer: { account },
+      });
+      return { name, eoa: account.address, smartAccount: sa.address };
+    }));
+
+    res.json({
+      chain: 'Base Sepolia (84532)',
+      usdc: process.env.USDC_ADDRESS,
+      note: 'Fund each smartAccount address with USDC for x402 micropayments',
+      accounts,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
