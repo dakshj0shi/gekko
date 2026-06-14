@@ -313,7 +313,7 @@ You can bridge USDC from other chains using: https://bridge.base.org
 - **`@metamask/delegation-toolkit@0.13.0`** is a renamed alias of `@metamask/smart-accounts-kit` — same code. Both installed in node_modules.
 - **Validator shares wallet with Researcher** — same private key, same address. Intentional (cost efficiency). Escrow skipped between them automatically.
 - **Agent-to-agent payments (backend, Base Sepolia)**: via ethers.js sendTransaction. Falls back to `status:'simulated'` if wallets are unfunded.
-- **x402 is disabled**: `X402_ENABLED=false` in config. All Venice calls go through direct proxy, no payment verification.
+- **x402 is ENABLED**: `X402_ENABLED=true` in `.env`. Server middleware (`src/x402-server.js`) uses `@x402/express` + `x402ExactEvmErc7710ServerScheme` on both Venice proxy routes — real payment required per call. Client wrapper (`src/x402-client.js`) gives each agent a `wrapFetchWithPayment` fetch that handles 402 → pay (ERC-7710 delegation) → retry automatically via MetaMask facilitator on Base Sepolia. Prices: $0.001/chat, $0.0005/search. Requires agent smart accounts funded with USDC on Base Sepolia. Set `X402_ENABLED=false` to revert to pass-through demo mode.
 - **Next.js static export**: `output: "export"` in next.config.ts. All API routes must be in `src/server.js` (Express), not `app/api/`.
 
 ---

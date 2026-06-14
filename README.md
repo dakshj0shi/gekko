@@ -212,6 +212,47 @@ Base Sepolia USDC faucet: https://faucet.circle.com
 
 ---
 
+## x402 Micropayments (Agent → Venice AI)
+
+x402 is a pay-per-call protocol built on ERC-7710 delegation. Every agent call to the Venice AI proxy requires a real USDC micropayment — the agent pays for what it uses, on-chain, automatically.
+
+**Status: enabled** (`X402_ENABLED=true`)
+
+### How it works
+
+```
+Agent → fetch('/api/venice/chat')
+     ← 402 Payment Required  ← server (x402/express middleware)
+  → x402 client detects 402
+  → agent smart account signs ERC-7710 delegation payment
+  → MetaMask facilitator settles on Base Sepolia
+  → retry with X-PAYMENT header
+     ← 200 OK + Venice response
+```
+
+### Prices
+
+| Route | Price |
+|-------|-------|
+| `POST /api/venice/chat` | $0.001 USDC per call |
+| `POST /api/venice/search` | $0.0005 USDC per call |
+
+Payments go to the treasury wallet (`X402_TREASURY_ADDRESS` in `.env`).
+
+### What's needed to run with x402
+
+Agent smart accounts on Base Sepolia need USDC to cover call costs. Each research mission makes roughly 3–6 Venice calls, so ~$0.003–$0.006 total per mission.
+
+Agent smart account addresses are deterministic — derived from each agent's EOA private key using `toMetaMaskSmartAccount({ implementation: Implementation.Hybrid, deploySalt: '0x' })`.
+
+Fund from: https://faucet.circle.com (Base Sepolia USDC)
+
+### To disable x402 (demo/pass-through mode)
+
+Set `X402_ENABLED=false` in `.env` — Venice calls go through for free, no payment required.
+
+---
+
 ## Venice AI Models
 
 | Use | Model |
