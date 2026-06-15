@@ -8,7 +8,11 @@ Built for the **MetaMask Smart Accounts × 1Shot API × Venice AI** hackathon.
 
 ## What It Does
 
-You submit a research goal. Four autonomous AI agents coordinate: the orchestrator plans, the researcher finds information, the validator fact-checks it, and the writer synthesizes a full report. Every agent gets paid in USDC — no human in the loop after you hit Launch.
+You submit a goal and **eight autonomous AI agents compete on price** to win each task. The orchestrator runs a live price auction in real-time — cheapest agent wins, you see the bids in the Live Feed. Agents are paid in USDC on Base Sepolia the moment the work is done.
+
+**Two modes:**
+- **Research mode** — agents research a topic, validate findings, and produce a professional markdown report
+- **Investment Analysis mode** — agents research DeFi protocols, validate yield data, and return a structured JSON allocation recommendation (opportunities, APYs, risk scores, allocation %)
 
 **Two payment layers run in parallel:**
 
@@ -199,14 +203,30 @@ Send ~**0.01 USDC** to each `smartAccount` address. Without this, x402 payments 
 
 ---
 
-## Agent Wallets
+## Agent Marketplace (8 Registered Services)
 
-| Agent | EOA Address (Base Sepolia) | Role |
-|-------|---------------------------|------|
-| Orchestrator | `0xF9bc59882a7d6D2Dd24ff3800F69CC459bDDCC62` | Coordinator |
-| Researcher | `0x6eB5e2011964a3D7Cf371aAbBD49545C70A7052c` | Venice web search |
-| Validator | `0x6eB5e2011964a3D7Cf371aAbBD49545C70A7052c` | Fact-checking (shares key with Researcher) |
-| Writer | `0x7cB1966270d9D257AD1EEE4bEb142622A9937494` | Report writing |
+The registry holds 8 agents across 3 capability categories. The orchestrator runs a live price auction before each task:
+
+| Agent | Price | Category | Notes |
+|-------|-------|----------|-------|
+| GekkoSourcer | $0.04 | Research | Usually wins research (cheapest) |
+| GekkoResearcher | $0.05 | Research | Core worker, Venice web search |
+| GekkoForecaster | $0.09 | Research | Trend prediction specialist |
+| GekkoAnalyst | $0.08 | Research + Investment | DeFi analysis, portfolio allocation |
+| GekkoValidator | $0.03 | Validation | Usually wins validation (cheapest) |
+| GekkoDebater | $0.045 | Validation | Adversarial fact-checking |
+| GekkoSummarizer | $0.025 | Writing | Usually wins writing (cheapest) |
+| GekkoWriter | $0.05 | Writing | Core worker, report synthesis |
+
+The Live Feed shows real-time bid events: "4 agents bid for research: Sourcer($0.04), Researcher($0.05), Analyst($0.08), Forecaster($0.09). Selecting cheapest."
+
+**Core wallets (EOA, Base Sepolia):**
+
+| Agent | EOA Address |
+|-------|------------|
+| Orchestrator | `0xF9bc59882a7d6D2Dd24ff3800F69CC459bDDCC62` |
+| Researcher | `0x6eB5e2011964a3D7Cf371aAbBD49545C70A7052c` |
+| Writer | `0x7cB1966270d9D257AD1EEE4bEb142622A9937494` |
 
 Agent Hybrid SA addresses (for x402 USDC funding) differ from EOA — get from `GET /api/agent-smartaccounts`.
 
@@ -229,6 +249,28 @@ Agent Hybrid SA addresses (for x402 USDC funding) differ from EOA — get from `
 | GET | `/api/events/stream` | SSE real-time stream of all agent actions |
 | GET | `/api/reasoning` | Agent decision log with full reasoning context |
 | GET | `/api/agents` | Agent names, roles, wallet addresses |
+
+---
+
+## Investment Analysis Mode
+
+Select "Investment Analysis" mode in the UI before launching. Agents receive DeFi-focused prompts:
+- **Researcher**: searches for "DeFi yield opportunities APY protocol comparison risk: [your goal]"
+- **Validator**: fact-checks yield data and protocol safety
+- **Writer**: returns valid JSON with this schema:
+
+```json
+{
+  "summary": "overview paragraph",
+  "opportunities": [
+    { "protocol": "Aave v3", "action": "Deposit USDC", "estimatedAPY": "3.2%", "risk": "low", "allocation": "40%" }
+  ],
+  "riskScore": 3,
+  "recommendation": "brief conclusion"
+}
+```
+
+The UI renders this as opportunity cards with risk badges (green/amber/red), allocation percentages, and a risk score bar. Not connected to real DeFi execution — analysis and recommendation only.
 
 ---
 

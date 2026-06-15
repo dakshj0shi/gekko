@@ -29,15 +29,11 @@ describe('ValidatorAgent', () => {
   });
 
   it('should validate research findings with mock LLM', async () => {
-    // Mock the Locus wrapped API
-    validator.locus = {
-      callWrappedAPI: async () => ({
-        status: 'success',
-        data: {
-          choices: [{ message: { content: '**Overall Quality:** 8/10\n**Confidence:** high\n**Issues Found:** none\n**Recommendation:** proceed' } }],
-        },
-      }),
-    };
+    validator.callAPI = async () => ({
+      data: {
+        choices: [{ message: { content: '**Overall Quality:** 8/10\n**Confidence:** high\n**Issues Found:** none\n**Recommendation:** proceed' } }],
+      },
+    });
 
     const findings = [
       { query: 'DeFi on Base', scrapedData: 'Base is an L2...', searchResults: 'Uniswap, Aave...', timestamp: new Date().toISOString() },
@@ -47,13 +43,11 @@ describe('ValidatorAgent', () => {
     assert.equal(result.validated, true);
     assert.equal(result.sourcesChecked, 1);
     assert.ok(result.report.includes('8/10'));
-    assert.equal(result.provider, 'grok');
+    assert.equal(result.provider, 'venice-reasoning');
   });
 
   it('should fall back to passthrough when all providers fail', async () => {
-    validator.locus = {
-      callWrappedAPI: async () => { throw new Error('API unavailable'); },
-    };
+    validator.callAPI = async () => { throw new Error('API unavailable'); };
 
     const findings = [{ query: 'test', scrapedData: null, searchResults: null, timestamp: new Date().toISOString() }];
     const result = await validator.validate(findings);
@@ -63,24 +57,23 @@ describe('ValidatorAgent', () => {
     assert.equal(result.sourcesChecked, 1);
   });
 
-  it('should try grok first then gemini', async () => {
+  it('should try venice-reasoning first then venice-fast', async () => {
     const callOrder = [];
-    validator.locus = {
-      callWrappedAPI: async (provider) => {
-        callOrder.push(provider);
-        if (provider === 'grok') throw new Error('Grok down');
-        return {
-          status: 'success',
-          data: { candidates: [{ content: { parts: [{ text: 'Validated via Gemini' }] } }] },
-        };
-      },
+    validator.callAPI = async (provider) => {
+      callOrder.push(provider);
+      if (provider === 'venice-reasoning') throw new Error('Reasoning down');
+      return {
+        data: {
+          choices: [{ message: { content: 'Validated via Venice Fast' } }],
+        },
+      };
     };
 
     const findings = [{ query: 'test', scrapedData: 'data', searchResults: null, timestamp: new Date().toISOString() }];
     const result = await validator.validate(findings);
 
-    assert.deepEqual(callOrder, ['grok', 'gemini']);
-    assert.equal(result.provider, 'gemini');
+    assert.deepEqual(callOrder, ['venice-reasoning', 'venice-fast']);
+    assert.equal(result.provider, 'venice-fast');
     assert.equal(result.validated, true);
   });
 

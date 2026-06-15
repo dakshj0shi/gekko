@@ -131,26 +131,36 @@ class ServiceRegistry {
   recordOutcome(agentName, success, paymentAmount = 0) {
     const rep = this.reputation.get(agentName) || {
       completed: 0, failed: 0, totalEarned: 0, score: 1.0,
+      wins: 0, losses: 0, survivalCount: 0, tier: 'junior',
     };
     if (success) {
       rep.completed++;
+      rep.wins++;
+      rep.survivalCount++;
       rep.totalEarned += paymentAmount;
     } else {
       rep.failed++;
+      rep.losses++;
+      rep.survivalCount = Math.max(0, rep.survivalCount - 1);
     }
     const total = rep.completed + rep.failed;
     rep.score = total > 0 ? rep.completed / total : 1.0;
+    // Tier evolution: junior → senior → master
+    if (rep.wins >= 10 && rep.score >= 0.85) rep.tier = 'master';
+    else if (rep.wins >= 3 && rep.score >= 0.6) rep.tier = 'senior';
+    else rep.tier = 'junior';
     this.reputation.set(agentName, rep);
   }
 
   /**
    * Get reputation data for an agent.
    * @param {string} agentName - Agent to look up
-   * @returns {object} Reputation with completed, failed, totalEarned, score
+   * @returns {object} Reputation with completed, failed, totalEarned, score, tier
    */
   getReputation(agentName) {
     return this.reputation.get(agentName) || {
       completed: 0, failed: 0, totalEarned: 0, score: 1.0,
+      wins: 0, losses: 0, survivalCount: 0, tier: 'junior',
     };
   }
 
@@ -172,7 +182,10 @@ class ServiceRegistry {
    */
   _sanitize({ locusApiKey, ...safe }) {
     const rep = this.reputation.get(safe.agentName);
-    if (rep) safe.reputation = rep.score;
+    if (rep) {
+      safe.reputation = rep.score;
+      safe.tier = rep.tier || 'junior';
+    }
     return safe;
   }
 }

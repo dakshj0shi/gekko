@@ -6,7 +6,11 @@
 
 ## What Gekko Is
 
-Gekko is an **autonomous agent-to-agent payment marketplace** built for the MetaMask Smart Accounts × 1Shot API × Venice AI hackathon. A user submits a research goal; four AI agents coordinate, pay each other in USDC, and deliver a full research report — all without human intervention.
+Gekko is an **autonomous agent-to-agent payment marketplace** built for the MetaMask Smart Accounts × 1Shot API × Venice AI hackathon. A user submits a goal (research or investment analysis); **eight autonomous AI agents compete on price** to win each task, pay each other in USDC, and deliver a full report — all without human intervention.
+
+**Two modes:**
+- **Research** — agents produce a markdown report with insights and takeaways
+- **Investment Analysis** — agents research DeFi protocols and return structured JSON with opportunities, APYs, risk scores, and allocation percentages
 
 **Dual payment layers:**
 - **1Shot (Base Sepolia)**: User → Agent payments via ERC-7710 FunctionCall + erc20PeriodTransfer delegation, gaslessly executed by 1Shot public relayer
@@ -143,21 +147,26 @@ No EIP-7702 authorization — Hybrid SA is a real deployed contract, not an EOA 
 
 ### Research pipeline (`POST /api/goal`):
 
+Body: `{ goal, budget, maxPerTask, mode: 'research' | 'investment', signedDelegation? }`
+
 ```
 User → POST /api/goal
   → server.js (rate limiting, budget cap)
-    → GekkoOrchestrator.executeGoal(goal, budget)
+    → GekkoOrchestrator.executeGoal(goal, { mode })
       1. _verifyBalance() — USDC balance check (passes even at 0)
-      2. _planSubtasks() — Venice LLM → 3 subtasks: research, validate, write
+      2. _planSubtasks() — 3 subtasks: research, validate, write
       3. For each subtask:
-         a. registry.discover(capability) — find cheapest agent
-         b. escrow.createEscrow() — in-memory session
-         c. agent.execute(task) — calls Venice AI via x402-gated proxy
-            → 402 Payment Required → agent Hybrid smart account pays via ERC-7710
-         d. orchestrator.pay() — direct USDC transfer via ethers (simulated if unfunded)
-      4. validator.validate() — fact-check via Venice deepseek-v3.2
-      5. writer.synthesize() — full report via Venice mistral-small-2603
-      6. Return { success, report, audit }
+         a. registry.findByCapability(cap) → all matching agents sorted by price
+         b. emit 'marketplace_bids' event → Live Feed shows auction
+         c. pick cheapest agent that has a worker → emit 'agent_discovered'
+         d. escrow.createEscrow() — in-memory session
+         e. agent.execute(task, opts.mode) — calls Venice with mode-specific prompts
+            → Investment mode: DeFi-focused research query + JSON output from writer
+         f. orchestrator.pay() — direct USDC transfer via ethers
+      4. validator.validate(findings) — fact-check via Venice deepseek-v3.2
+      5. writer.synthesize(findings, 'report', opts.mode) — report via Venice mistral-small-2603
+         → Investment mode: JSON with opportunities/riskScore/recommendation
+      6. Return { success, report, audit, mode }
 ```
 
 ### ERC-7710 on-chain payment flow (frontend-initiated):
@@ -217,6 +226,17 @@ Note: x402 is REAL infrastructure (not cosmetic). Falls back to pass-through if 
 
 ---
 
+## `relayer_getFeeData` (Added)
+
+`getFeeData(tokenAddress)` in `src/oneshot.js` calls `relayer_getFeeData` to get the relayer's minimum fee for a token. Used in `/api/execute` to set `feeAmount` before estimate instead of hardcoded 0.01 USDC. Falls back to `ONESHOT_FEE_USDC` on error.
+
+```javascript
+const feeData = await getFeeData(USDC_BASE)  // → { minFee, rate, feeCollector, ... }
+let feeAmount = feeData?.minFee ? BigInt(feeData.minFee) : ONESHOT_FEE_USDC
+```
+
+---
+
 ## 1Shot Integration Details (`src/oneshot.js`)
 
 **Full 6-step flow (matching Ruleo reference implementation):**
@@ -263,10 +283,48 @@ Note: x402 is REAL infrastructure (not cosmetic). Falls back to pass-through if 
 | `signedDelegation` | DelegationRecord after MetaMask EIP-712 signing |
 | `signingDelegation` | Loading state during MetaMask EIP-712 popup |
 | `onChainPayment` | State machine: `idle → executing → polling → confirmed/failed` |
+| `mode` | `'research'` or `'investment'` — controls agent prompts + report renderer |
+| `investmentData` | Parsed JSON from investment mode writer output (opportunities, riskScore, etc.) |
 
 **Button flow**: Connect Wallet → (if not deployed) **Deploy Smart Account** → Sign Delegation → [Delegation Active] → (after mission) **Pay Agents On-Chain** → polling → confirmed (Sepolia BaseScan link)
 
+**UI tabs**: report · marketplace · delegation · escrow · transactions · reasoning
+
+**Mode toggle**: Two buttons in the goal section — "Research" (green) and "Investment Analysis" (amber). Mode is sent to `/api/goal` and changes Venice prompts + report renderer.
+
+**Investment report renderer**: Detects JSON via `tryParseInvestmentJson()` (handles direct JSON, markdown fences, or first `{...}` extraction). Renders opportunity cards with risk badges (emerald/amber/red), APY, allocation %, and risk score bar.
+
+**Delegation chain tree**: When `signedDelegation` is set, the Delegation tab shows a 4-layer tree: USER EOA → Hybrid SA (signed ERC-7710) → 1Shot Target → [Fee, Researcher, Validator, Writer] payments.
+
+**Live Feed bid events**: `marketplace_bids` events render as amber auction cards with all candidates listed (highest bidder struck through) and winner highlighted in emerald.
+
 On wallet connect: `eth_getCode(saAddress)` checked via Base Sepolia RPC → sets `smartAccountDeployed` flag
+
+---
+
+## Agent Marketplace (8 Services)
+
+8 agents registered across 3 capability categories. Orchestrator runs a live price auction before each task:
+
+| Agent | Price | Category | Type |
+|-------|-------|----------|------|
+| GekkoSourcer | $0.04 | Research | Virtual (shares researcher wallet) — wins research auctions |
+| GekkoResearcher | $0.05 | Research | Core worker, Venice web search |
+| GekkoForecaster | $0.09 | Research | Virtual — trend prediction specialist |
+| GekkoAnalyst | $0.08 | Research + Investment | Virtual — DeFi analysis |
+| GekkoValidator | $0.03 | Validation | Core worker, wins validation auctions |
+| GekkoDebater | $0.045 | Validation | Virtual — adversarial review |
+| GekkoSummarizer | $0.025 | Writing | Virtual (shares writer wallet) — wins writing auctions |
+| GekkoWriter | $0.05 | Writing | Core worker, report synthesis |
+
+Virtual agents share wallets with core agents — the orchestrator discovers them in the marketplace and they win on price, but execution uses the underlying core agent. The Live Feed shows the full auction in real-time.
+
+**Live Feed marketplace_bids events (example):**
+```
+4 agents bid for "research": Sourcer($0.04), Researcher($0.05), Analyst($0.08), Forecaster($0.09). Selecting cheapest.
+```
+
+**ADDITIONAL_SERVICES** in `src/config.js` declares the virtual agents. Registered in `src/server.js` `initAgents()` after core agents.
 
 ---
 

@@ -23,12 +23,20 @@ const EscrowManager = require('../src/escrow');
 
 /** Create a mock worker agent with controllable behavior. */
 function createMockWorker(role, name, wallet) {
+  const mockWallet = {
+    address: wallet,
+    getBalance: async () => 10.0,
+    transfer: async () => ({ txId: `tx-${role}` }),
+  };
   return {
     id: `mock-${role}`,
     name,
     role,
     walletAddress: wallet,
+    agentWallet: mockWallet,
     agentEmail: `${role}@test.com`,
+    isQuarantined: () => false,
+    die: () => {},
     locus: {
       getBalance: async () => ({ status: 'success', data: { usdc_balance: '10.00' } }),
       getTransactions: async () => ({ status: 'success', data: { transactions: [] } }),
@@ -69,10 +77,15 @@ describe('OrchestratorAgent', () => {
     registry = new ServiceRegistry();
     escrowManager = new EscrowManager();
 
+    const mockAgentWallet = {
+      address: '0xORCH',
+      getBalance: async () => 10.0,
+      transfer: async () => ({ txId: 'tx-orch' }),
+    };
+
     orchestrator = new OrchestratorAgent({
       name: 'TestOrchestrator',
-      locusApiKey: 'test-orch-key',
-      walletAddress: '0xORCH',
+      agentWallet: mockAgentWallet,
       registry,
       escrowManager,
     });

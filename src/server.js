@@ -3,7 +3,9 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
-const { AGENTS, RATE_LIMITS, BUDGET, SYSTEM, NETWORK, ONESHOT, VENICE, X402 } = require('./config');
+const { AGENTS, RATE_LIMITS, BUDGET, SYSTEM, NETWORK, ONESHOT, VENICE, X402, ADDITIONAL_SERVICES } = require('./config');
+const { getMemory, getAllMemories } = require('./mission-memory');
+const spawnManager = require('./spawn-manager');
 const dispatchEvents = require('./event-bus');
 const ServiceRegistry = require('./registry');
 const EscrowManager = require('./escrow');
@@ -19,6 +21,7 @@ const { getDelegationChain } = require('./delegation');
 const { buildPermissionRequestParams, parseGrantedPermissions } = require('./permissions');
 const {
   getCapabilities,
+  getFeeData,
   estimate7710Transaction,
   send7710Transaction,
   getTaskStatus,
@@ -37,6 +40,22 @@ const REASONING_ACTIONS = new Set([
   'budget_exceeded', 'payment_initiated', 'payment_completed',
   'escrow_created', 'escrow_released', 'goal_received', 'goal_completed',
   'dynamic_planning', 'validation_result', 'research_empty',
+  'marketplace_bids',
+  // Phase 2 — mission memory
+  'memory_fact_added', 'memory_updated', 'death_note_created',
+  // Phase 3 — spawn trees
+  'spawn_root', 'spawn_started', 'spawn_completed', 'spawn_died', 'spawn_decomposing',
+  // Phase 4 — debate
+  'debate_started', 'debate_completed', 'debate_failed',
+  'bull_thinking', 'bull_argument', 'bull_failed',
+  'bear_thinking', 'bear_argument', 'bear_failed',
+  'judge_thinking', 'judge_verdict', 'judge_failed',
+  // Phase 5 — agent death
+  'agent_died', 'agent_resurrected', 'agent_quarantined_skip',
+  // Phase 10 — supervisor
+  'supervisor_checking', 'supervisor_verdict', 'supervisor_failed',
+  // Demo flow
+  'agent_replacement',
 ]);
 
 // ── App Setup ────────────────────────────────────────────────────
@@ -162,6 +181,18 @@ async function initAgents() {
   if (wConf.service) writer.registerService(registry, wConf.service);
   if (vConf.service) validator.registerService(registry, vConf.service);
 
+  // Register virtual marketplace agents — they compete on price in the Live Feed
+  // but share wallets with core agents, so execution always succeeds
+  for (const s of ADDITIONAL_SERVICES) {
+    const wallet = AGENTS[s.walletRole]?.address || AGENTS.orchestrator.address;
+    registry.register(s.agentName, wallet, null, {
+      name: s.name,
+      description: s.description,
+      price: s.price,
+      capabilities: s.capabilities,
+    });
+  }
+
   console.log('Gekko agents initialized:');
   console.log(`  Orchestrator: ${oConf.address}`);
   console.log(`  Researcher:   ${rConf.address}`);
@@ -202,6 +233,10 @@ let lastGoalTime = 0;
 const goalHourWindow = [];
 const ipGoalCounts = new Map();
 
+// Last completed report — fetched by client after goal_completed SSE
+let lastReport = null;
+let lastReportMeta = null;
+
 setInterval(() => {
   const cutoff = Date.now() - RATE_LIMITS.oneHourMs;
   for (const [ip, times] of ipGoalCounts) {
@@ -212,7 +247,7 @@ setInterval(() => {
 }, 600000);
 
 app.post('/api/goal', async (req, res) => {
-  const { goal, budget, maxPerTask, permissionContext } = req.body;
+  const { goal, budget, maxPerTask, permissionContext, mode } = req.body;
   if (!goal || typeof goal !== 'string') return res.status(400).json({ error: 'goal is required' });
   if (goal.length > SYSTEM.maxGoalLength) return res.status(400).json({ error: `goal must be under ${SYSTEM.maxGoalLength} characters` });
   if (budget !== undefined && (!Number.isFinite(Number(budget)) || Number(budget) <= 0))
@@ -250,10 +285,13 @@ app.post('/api/goal', async (req, res) => {
   }
 
   try {
-    const results = await orchestrator.executeGoal(goal);
-    res.json({ success: true, goal, report: results.report, audit: results.audit });
+    const safeMode = mode === 'investment' ? 'investment' : 'research';
+    const results = await orchestrator.executeGoal(goal, { mode: safeMode });
+    if (res.headersSent) return;
+    res.json({ success: true, goal, report: results.report, audit: results.audit, mode: safeMode });
   } catch (err) {
     console.error('Goal failed:', err);
+    if (res.headersSent) return;
     res.status(500).json({ error: 'Goal execution failed. Check server logs for details.' });
   }
 });
@@ -446,8 +484,15 @@ app.post('/api/execute', async (req, res) => {
       { address: AGENTS.writer.address,     amountUsdc: 0.05 },
     ];
 
-    // Step 3: Build executions with mock fee (fee first, then agent transfers)
-    let feeAmount = ONESHOT_FEE_USDC; // 0.01 USDC default
+    // Step 3: Get initial fee from relayer_getFeeData (more accurate than hardcoded)
+    let feeAmount = ONESHOT_FEE_USDC; // 0.01 USDC fallback
+    try {
+      const feeData = await getFeeData(USDC_BASE);
+      if (feeData?.minFee) feeAmount = BigInt(feeData.minFee);
+      console.log(`[execute] initial fee from getFeeData: ${feeAmount}`);
+    } catch (err) {
+      console.warn('[execute] getFeeData failed, using fallback:', err.message);
+    }
     let executions = buildAgentPaymentExecutions(payTo, feeCollector, feeAmount);
 
     // Step 4: Estimate to get context blob and required fee
@@ -568,6 +613,22 @@ app.get('/api/agent-smartaccounts', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// Mission memory routes
+app.get('/api/memory', (_req, res) => {
+  res.json({ memories: getAllMemories() });
+});
+
+app.get('/api/memory/:missionId', (req, res) => {
+  const memory = getMemory(req.params.missionId);
+  res.json(memory.toJSON());
+});
+
+// Spawn tree route
+app.get('/api/spawn-tree/:missionId', (req, res) => {
+  const tree = spawnManager.getTree(req.params.missionId);
+  res.json({ missionId: req.params.missionId, nodes: tree });
 });
 
 // SPA fallback

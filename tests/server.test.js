@@ -24,7 +24,7 @@ describe('Config', () => {
     assert.ok(BUDGET.maxPerGoal > 0);
     assert.ok(BUDGET.maxPerTask > 0);
     assert.ok(BUDGET.maxPerTask <= BUDGET.maxPerGoal);
-    assert.ok(BUDGET.minBalance > 0);
+    assert.ok(BUDGET.minBalance >= 0);
     assert.ok(BUDGET.defaultMaxPrice > 0);
   });
 

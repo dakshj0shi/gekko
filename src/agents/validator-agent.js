@@ -81,6 +81,10 @@ class ValidatorAgent extends BaseAgent {
         const str = typeof f.searchResults === 'string' ? f.searchResults : JSON.stringify(f.searchResults);
         content += `Search results:\n${str.slice(0, 2000)}\n\n`;
       }
+      if (f.scrapedData) {
+        const str = typeof f.scrapedData === 'string' ? f.scrapedData : JSON.stringify(f.scrapedData);
+        content += `Scraped content:\n${str.slice(0, 2000)}\n\n`;
+      }
       return content;
     });
 

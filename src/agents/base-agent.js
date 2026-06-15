@@ -22,6 +22,8 @@ class BaseAgent {
     // Falls back to global fetch if not provided (demo mode / unfunded).
     this.fetchWithPayment = fetchWithPayment || fetch.bind(globalThis);
     this.taskLog = [];
+    this.isDead = false;
+    this.quarantinedUntil = 0;
   }
 
   log(action, details = {}) {
@@ -93,6 +95,32 @@ class BaseAgent {
     this.log('api_call_completed', { type: 'api', provider: 'venice', endpoint, success: true });
 
     return { data };
+  }
+
+  // Mark this agent as dead and enter a 30-second quarantine
+  die(reason, missionId = null) {
+    const QUARANTINE_MS = 30_000;
+    this.isDead = true;
+    this.quarantinedUntil = Date.now() + QUARANTINE_MS;
+    this.log('agent_died', {
+      reason,
+      missionId,
+      quarantinedUntil: new Date(this.quarantinedUntil).toISOString(),
+      reasoning: `Agent ${this.name} died: ${reason}. Quarantined for 30s.`,
+    });
+  }
+
+  // Returns true if in the 30-second quarantine window
+  isQuarantined() {
+    if (!this.isDead) return false;
+    if (Date.now() >= this.quarantinedUntil) {
+      // Quarantine expired — resurrect
+      this.isDead = false;
+      this.quarantinedUntil = 0;
+      this.log('agent_resurrected', { reasoning: `${this.name} quarantine expired — back in service.` });
+      return false;
+    }
+    return true;
   }
 
   registerService(registry, serviceDef) {

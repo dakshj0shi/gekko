@@ -5,18 +5,35 @@ const MAX_OUTPUT_TOKENS = 4096;
 const PRIMARY_TRUNCATE_LIMIT = 3000;
 const SUPPLEMENTARY_TRUNCATE_LIMIT = 2000;
 
+const INVESTMENT_SYSTEM_PROMPT = `You are a DeFi investment advisor analyzing Base Sepolia testnet opportunities.
+Based on research findings, produce a structured JSON investment recommendation with EXACTLY this schema:
+{
+  "summary": "one paragraph overview",
+  "opportunities": [
+    { "protocol": "protocol name", "action": "what to do", "estimatedAPY": "X%", "risk": "low|medium|high", "allocation": "X%" }
+  ],
+  "riskScore": 1,
+  "recommendation": "brief closing recommendation"
+}
+Respond ONLY with valid JSON. No markdown. No explanation outside the JSON.`;
+
 const LLM_PROVIDERS = [
   {
     name: 'venice',
     endpoint: 'chat',
-    buildBody: (prompt) => ({
+    buildBody: (prompt, mode) => ({
       model: VENICE_MODELS.fast,
       messages: [
-        { role: 'system', content: 'You are a professional report writer. Produce clear, well-structured reports with actionable takeaways.' },
+        {
+          role: 'system',
+          content: mode === 'investment'
+            ? INVESTMENT_SYSTEM_PROMPT
+            : 'You are a professional report writer. Produce clear, well-structured reports with actionable takeaways.',
+        },
         { role: 'user', content: prompt },
       ],
       max_tokens: MAX_OUTPUT_TOKENS,
-      temperature: 0.7,
+      temperature: mode === 'investment' ? 0.3 : 0.7,
     }),
   },
 ];
@@ -26,15 +43,15 @@ class WriterAgent extends BaseAgent {
     super({ ...config, role: 'writer' });
   }
 
-  async synthesize(researchFindings, outputFormat = 'report') {
-    this.log('synthesis_started', { inputSources: researchFindings.length, format: outputFormat });
+  async synthesize(researchFindings, outputFormat = 'report', mode = null, memoryContext = '') {
+    this.log('synthesis_started', { inputSources: researchFindings.length, format: outputFormat, mode });
 
-    const prompt = this._buildPrompt(researchFindings, outputFormat);
+    const prompt = this._buildPrompt(researchFindings, outputFormat, mode, memoryContext);
 
     for (const provider of LLM_PROVIDERS) {
       try {
-        const result = await this.callAPI(provider.name, provider.endpoint, provider.buildBody(prompt));
-        this.log('synthesis_completed', { provider: provider.name, format: outputFormat });
+        const result = await this.callAPI(provider.name, provider.endpoint, provider.buildBody(prompt, mode));
+        this.log('synthesis_completed', { provider: provider.name, format: outputFormat, mode });
 
         const content = this._extractContent(result);
         return {
@@ -67,7 +84,7 @@ class WriterAgent extends BaseAgent {
     return data;
   }
 
-  _buildPrompt(findings, format) {
+  _buildPrompt(findings, format, mode, memoryContext = '') {
     const sections = findings.map((f, i) => {
       let content = `## Source ${i + 1}: ${f.query}\n`;
       if (f.searchResults) {
@@ -80,13 +97,23 @@ class WriterAgent extends BaseAgent {
     });
 
     const today = new Date().toISOString().split('T')[0];
+    const memorySection = memoryContext ? `\n## Mission Memory Context\n${memoryContext}\n` : '';
+
+    if (mode === 'investment') {
+      return `Based on the following DeFi research findings, produce a structured JSON investment recommendation.
+Include realistic APY estimates, protocol risk assessments, and suggested allocation percentages.
+Focus on Base Sepolia testnet protocols and opportunities.
+${memorySection}
+Research findings:\n\n${sections.join('\n')}`;
+    }
+
     return `Based on the following research findings, create a clear, professional ${format} with key insights and actionable takeaways.
 
 IMPORTANT: Do NOT use placeholder text like "[Your Name]", "[Current Date]", or "[Link]". Instead:
 - Use "Gekko Research Team" as the author
 - Use "${today}" as the date
 - For source links, use actual URLs from the research data if available, or omit the links section
-
+${memorySection}
 Research findings:\n\n${sections.join('\n')}`;
   }
 

@@ -86,6 +86,12 @@ const VENICE = {
   baseUrl: process.env.VENICE_BASE_URL || 'https://api.venice.ai/api/v1',
 };
 
+const LOCUS = {
+  baseUrl: 'https://api.paywithlocus.com/v1',
+  betaUrl: 'https://beta.paywithlocus.com/v1',
+  statusPendingApproval: 202,
+};
+
 // MetaMask facilitator endpoint for ERC-7710 x402 settlement
 const METAMASK_FACILITATOR_URL = NETWORK.chainId === 8453
   ? 'https://tx-sentinel-base-mainnet.dev-api.cx.metamask.io/platform/v2/x402'
@@ -102,4 +108,75 @@ const X402 = {
   enabled: process.env.X402_ENABLED === 'true',
 };
 
-module.exports = { AGENTS, RATE_LIMITS, BUDGET, SYSTEM, NETWORK, ONESHOT, VENICE, X402 };
+// Additional marketplace agents — virtual competitors that share wallets with core agents.
+// They register as separate services so the orchestrator discovers them during bidding and
+// the Live Feed shows real price competition. walletRole maps to an AGENTS key for wallet lookup.
+const ADDITIONAL_SERVICES = [
+  {
+    agentName:   'GekkoSourcer',
+    walletRole:  'researcher',
+    price:        0.04,
+    name:        'Premium Web Sourcing',
+    description: 'Multi-source deep web research with citation tracking and URL verification',
+    capabilities: ['research', 'search', 'sources', 'citations', 'web'],
+  },
+  {
+    agentName:   'GekkoForecaster',
+    walletRole:  'orchestrator',
+    price:        0.09,
+    name:        'Trend & Market Forecasting',
+    description: 'Market trend analysis, sentiment scoring, and predictive modeling',
+    capabilities: ['research', 'forecasting', 'trends', 'prediction', 'analysis'],
+  },
+  {
+    agentName:   'GekkoDebater',
+    walletRole:  'researcher',
+    price:        0.045,
+    name:        'Adversarial Review',
+    description: 'Challenges research claims with counter-arguments and devil\'s advocacy',
+    capabilities: ['validation', 'fact-checking', 'adversarial', 'review'],
+  },
+  {
+    agentName:   'GekkoSummarizer',
+    walletRole:  'writer',
+    price:        0.025,
+    name:        'Executive Summary',
+    description: 'Fast, concise executive summaries optimized for decision-makers',
+    capabilities: ['writing', 'summarization', 'synthesis', 'executive'],
+  },
+  {
+    agentName:   'GekkoAnalyst',
+    walletRole:  'writer',
+    price:        0.08,
+    name:        'Investment Analysis',
+    description: 'APY comparison, DeFi protocol due diligence, and portfolio allocation',
+    capabilities: ['research', 'analysis', 'investment', 'financial-analysis', 'defi'],
+  },
+  // Debate trio — registered for marketplace visibility
+  {
+    agentName:   'GekkoBull',
+    walletRole:  'researcher',
+    price:        0.02,
+    name:        'Bull Analyst',
+    description: 'Builds the strongest bullish case from research findings',
+    capabilities: ['debate', 'analysis', 'bull'],
+  },
+  {
+    agentName:   'GekkoBear',
+    walletRole:  'researcher',
+    price:        0.02,
+    name:        'Bear Analyst',
+    description: 'Identifies risks and builds adversarial counter-arguments',
+    capabilities: ['debate', 'validation', 'bear'],
+  },
+  {
+    agentName:   'GekkoJudge',
+    walletRole:  'validator',
+    price:        0.03,
+    name:        'Debate Judge',
+    description: 'Produces consensus verdict and confidence score from bull/bear debate',
+    capabilities: ['debate', 'validation', 'consensus'],
+  },
+];
+
+module.exports = { AGENTS, RATE_LIMITS, BUDGET, SYSTEM, NETWORK, ONESHOT, VENICE, LOCUS, X402, ADDITIONAL_SERVICES };

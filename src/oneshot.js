@@ -175,6 +175,24 @@ function buildAgentPaymentExecutions(recipients, feeCollector = ONESHOT_FEE_ADDR
   return [feeExecution, ...agentExecutions]
 }
 
+/**
+ * Fetch fee data for a token from the 1Shot relayer.
+ * Returns { minFee, rate, feeCollector, ... } — use minFee as initial feeAmount
+ * before calling estimate7710Transaction. Falls back to ONESHOT_FEE_USDC on error.
+ */
+async function getFeeData(tokenAddress) {
+  try {
+    const result = await rpc('relayer_getFeeData', {
+      chainId: String(ONESHOT_CHAIN_ID),
+      token: tokenAddress,
+    })
+    return result
+  } catch (err) {
+    console.warn('[1Shot] getFeeData failed, using fallback:', err.message)
+    return { minFee: String(ONESHOT_FEE_USDC), feeCollector: ONESHOT_FEE_ADDRESS }
+  }
+}
+
 module.exports = {
   ONESHOT_RELAYER,
   ONESHOT_TARGET,
@@ -185,6 +203,7 @@ module.exports = {
   BASE_EXPLORER,
   toRelayerJson,
   getCapabilities,
+  getFeeData,
   estimate7710Transaction,
   send7710Transaction,
   getTaskStatus,
